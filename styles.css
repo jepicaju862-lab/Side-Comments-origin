@@ -177,16 +177,39 @@
     gap: 4px;
 }
 
-/* 原文引用样式 */
+/* 原文引用样式 (supports markdown rendering) */
 .sidenote-selected-text {
     font-size: 0.95em;
-    font-weight: 500;
     margin: 0 0 4px 0;
     color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     font-family: var(--font-ui);
+    max-height: 4.8em;
+    overflow: hidden;
+    position: relative;
+    transition: max-height 0.3s ease;
+}
+
+.sidenote-selected-text.is-truncated, .sidenote-comment-content.is-truncated {
+    mask-image: linear-gradient(to bottom, black calc(100% - 1.2em), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 1.2em), transparent 100%);
+    cursor: pointer;
+}
+
+.sidenote-selected-text.expanded, .sidenote-comment-content.expanded {
+    max-height: none;
+    mask-image: none;
+    -webkit-mask-image: none;
+    cursor: pointer;
+}
+
+.sidenote-selected-text p {
+    margin: 0 0 2px 0;
+    font-weight: 500;
+    line-height: 1.4;
+}
+
+.sidenote-selected-text p:last-child {
+    margin-bottom: 0;
 }
 
 .sidenote-timestamp {
@@ -204,6 +227,14 @@
     word-wrap: break-word;
     word-break: break-word;
     padding: 12px 14px;
+    max-height: 6em;
+    overflow: hidden;
+    position: relative;
+    transition: max-height 0.3s ease;
+}
+
+.sidenote-comment-content.collapsed {
+    display: none;
 }
 
 /* Empty State */
@@ -512,24 +543,37 @@
     z-index: 9999;
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    border-radius: 30px;
-    background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1), 0 2px 8px rgba(0, 0, 0, 0.05);
-    border: 1px solid rgba(0, 0, 0, 0.05);
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: 99px;
+    background: rgba(255, 255, 255, 0.9);
+    backdrop-filter: blur(24px) saturate(150%);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
+    box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.15), 0 2px 10px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    border: 1px solid rgba(0, 0, 0, 0.08);
     transform: translate(-50%, -100%);
-    margin-top: -12px;
+    margin-top: -16px;
     animation: sidenote-toolbar-pop 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
     pointer-events: auto;
 }
 
 .theme-dark .sidenote-selection-toolbar {
     background: rgba(30, 30, 30, 0.85);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    margin-top: -10px;
+    transform: translate(-50%, -100%);
+    animation: sidenote-toolbar-pop 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+    box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.2), 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.sidenote-selection-toolbar.sidenote-toolbar-bottom {
+    margin-top: 10px;
+    transform: translate(-50%, 0);
+    animation: sidenote-toolbar-pop-bottom 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+@keyframes sidenote-toolbar-pop-bottom {
+    0% { opacity: 0; transform: translate(-50%, -20%) scale(0.9); }
+    100% { opacity: 1; transform: translate(-50%, 0) scale(1); }
 }
 
 @keyframes sidenote-toolbar-pop {
@@ -541,29 +585,35 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    border: 1px solid rgba(0,0,0,0.04);
-    background: #ffffff;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+    width: 36px !important;
+    height: 36px !important;
+    border-radius: 8px !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    padding: 0 !important;
     cursor: pointer;
     color: var(--text-normal);
-    transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+    transition: background 0.15s ease, transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.sidenote-toolbar-btn svg {
+    width: 20px !important;
+    height: 20px !important;
+    stroke-width: 1.5px;
 }
 
 .sidenote-toolbar-btn:hover {
-    transform: scale(1.05);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.08);
+    transform: scale(0.95);
+    background: rgba(0, 0, 0, 0.06) !important;
 }
 
 .theme-dark .sidenote-toolbar-btn {
-    background: #2a2a2a;
-    border-color: rgba(255, 255, 255, 0.05);
+    background: transparent !important;
 }
 
 .theme-dark .sidenote-toolbar-btn:hover {
-    background: #333333;
+    background: rgba(255, 255, 255, 0.1) !important;
 }
 
 .sidenote-toolbar-divider {
@@ -573,22 +623,216 @@
     margin: 0 4px;
 }
 
-.sidenote-toolbar-color-picker {
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    border: 2px solid transparent;
+.sidenote-color-circle {
+    width: 26px;
+    height: 26px;
     border-radius: 50%;
-    overflow: hidden;
     cursor: pointer;
-    background: transparent;
+    background-color: var(--circle-color);
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    box-sizing: border-box;
+    position: relative;
 }
 
-.sidenote-toolbar-color-picker::-webkit-color-swatch-wrapper {
+.sidenote-color-circle:hover {
+    transform: scale(1.1);
+}
+
+.sidenote-color-circle.active {
+    box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--circle-color), 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.theme-dark .sidenote-color-circle.active {
+    box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--circle-color), 0 4px 8px rgba(0, 0, 0, 0.4);
+}
+
+.sidenote-color-circle.custom-color {
+    background: conic-gradient(from 90deg, #ff3b30, #ff9500, #ffcc00, #4cd964, #5ac8fa, #007aff, #5856d6, #ff2d55, #ff3b30) !important;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1) !important;
+    border: none !important;
+    overflow: hidden;
+}
+
+.theme-dark .sidenote-color-circle.custom-color {
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15) !important;
+}
+
+.sidenote-color-circle.custom-color.active {
+    transform: scale(1.15);
+    box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--text-normal), 0 4px 8px rgba(0, 0, 0, 0.15) !important;
+}
+
+.sidenote-toolbar-color-picker {
+    position: absolute;
+    top: -10px;
+    left: -10px;
+    width: 44px;
+    height: 44px;
+    opacity: 0;
+    cursor: pointer;
     padding: 0;
+    border: none;
 }
 
-.sidenote-toolbar-color-picker::-webkit-color-swatch {
+/* ==========================================================================
+   8. Edit Comment Modal
+   ========================================================================== */
+.sidenote-edit-modal {
+    padding: 24px;
+    border-radius: 20px;
+    max-width: 500px;
     border: none;
-    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.85) !important;
+    backdrop-filter: blur(40px) saturate(200%);
+    -webkit-backdrop-filter: blur(40px) saturate(200%);
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.12), 0 8px 16px rgba(0, 0, 0, 0.04), inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+
+.theme-dark .sidenote-edit-modal {
+    background: rgba(30, 30, 30, 0.75) !important;
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4), 0 8px 16px rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.sidenote-edit-modal-header h2 {
+    margin: 0 0 2px 0;
+    font-size: 1.4em;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+.sidenote-edit-modal-subtitle {
+    margin: 0 0 16px 0;
+    color: var(--text-muted);
+    font-size: 0.85em;
+    font-weight: 500;
+}
+
+.sidenote-edit-modal-selected {
+    background: var(--background-secondary);
+    padding: 12px 16px;
+    border-radius: 12px;
+    margin-bottom: 12px;
+    font-size: 0.95em;
+    color: var(--text-normal);
+    border: 1px solid var(--background-modifier-border);
+}
+
+.sidenote-edit-modal-textarea-box {
+    border-radius: 12px;
+    border: none;
+    background: rgba(0, 0, 0, 0.03);
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
+    transition: box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.theme-dark .sidenote-edit-modal-textarea-box {
+    background: rgba(255, 255, 255, 0.03);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.sidenote-edit-modal-textarea-box:focus-within {
+    background: transparent;
+    box-shadow: 0 0 0 2px #007aff, 0 4px 12px rgba(0, 122, 255, 0.15);
+}
+
+.theme-dark .sidenote-edit-modal-textarea-box:focus-within {
+    box-shadow: 0 0 0 2px #0a84ff, 0 4px 12px rgba(10, 132, 255, 0.2);
+}
+
+.sidenote-edit-modal-textarea {
+    width: 100%;
+    min-height: 80px;
+    border: none;
+    background: transparent;
+    resize: none;
+    padding: 0;
+    color: var(--text-normal);
+    box-shadow: none !important;
+}
+
+.sidenote-edit-modal-textarea:focus {
+    box-shadow: none !important;
+    border: none;
+    outline: none;
+}
+
+.sidenote-edit-modal-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.sidenote-edit-modal-colors {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.sidenote-edit-modal-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.sidenote-icon-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 20px;
+    border: none;
+    background: rgba(0, 0, 0, 0.04);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: all 0.2s ease;
+    box-shadow: none;
+}
+
+.theme-dark .sidenote-icon-btn {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.sidenote-icon-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
+    color: var(--text-normal);
+    transform: scale(0.95);
+}
+
+.theme-dark .sidenote-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.sidenote-btn-danger {
+    color: var(--text-error);
+}
+
+.sidenote-btn-danger:hover {
+    background: rgba(255, 59, 48, 0.1);
+    color: #ff3b30;
+}
+
+.sidenote-update-btn {
+    background: #007aff;
+    color: white;
+    border: none;
+    border-radius: 20px;
+    padding: 6px 18px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0, 122, 255, 0.25);
+    transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.15s;
+}
+
+.theme-dark .sidenote-update-btn {
+    background: #0a84ff;
+    box-shadow: 0 4px 12px rgba(10, 132, 255, 0.3);
+}
+
+.sidenote-update-btn:hover {
+    transform: scale(0.96);
+    box-shadow: 0 2px 6px rgba(0, 122, 255, 0.2);
 }

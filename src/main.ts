@@ -1621,8 +1621,47 @@ export default class SideNote extends Plugin {
             if (line.startsWith(">")) return line.slice(1);
             return line;
         });
+        while (commentLines.length > 0 && commentLines[commentLines.length - 1] === "") {
+            commentLines.pop();
+        }
         const commentText = commentLines.join("\n");
         return commentText === "（无）" ? "" : commentText;
+    }
+
+    private async evaluateAnnotationCommentSyncState(
+        currentContent: string,
+        existingFrontmatter: Record<string, any> | undefined,
+        jsonCommentText: string
+    ): Promise<{
+        storedHash: string;
+        noteCommentText: string;
+        noteCommentHash: string;
+        jsonCommentHash: string;
+        noteChangedSinceSync: boolean;
+        jsonChangedSinceSync: boolean;
+        conflict: boolean;
+    }> {
+        const noteCommentText = this.parseAnnotationBacklinkComment(currentContent);
+        const noteCommentHash = await this.generateCommentHash(noteCommentText);
+        const jsonCommentHash = await this.generateCommentHash(jsonCommentText);
+        const storedHash = typeof existingFrontmatter?.side_comments?.comment_hash_at_sync === "string"
+            ? existingFrontmatter.side_comments.comment_hash_at_sync
+            : "";
+        const noteChangedSinceSync = !!storedHash && noteCommentHash !== storedHash;
+        const jsonChangedSinceSync = !!storedHash && jsonCommentHash !== storedHash;
+        const conflict = !!storedHash
+            && noteChangedSinceSync
+            && jsonChangedSinceSync
+            && noteCommentHash !== jsonCommentHash;
+        return {
+            storedHash,
+            noteCommentText,
+            noteCommentHash,
+            jsonCommentHash,
+            noteChangedSinceSync,
+            jsonChangedSinceSync,
+            conflict,
+        };
     }
 
     private async findExistingAnnotationFile(annotationId: string, expectedPath: string): Promise<TFile | null> {
@@ -1760,7 +1799,7 @@ export default class SideNote extends Plugin {
         return `---\n${stringifyYaml(frontmatter)}---\n\n${this.buildNewAnnotationBody(comment)}`;
     }
 
-    private async upsertAnnotationNoteForComment(file: TFile, comment: Comment): Promise<"created" | "updated" | "noop"> {
+    private async upsertAnnotationNoteForComment(file: TFile, comment: Comment): Promise<"created" | "updated" | "noop" | "blocked"> {
         const annotationId = `side-comments:${comment.timestamp}`;
         const expectedPath = this.getExpectedAnnotationPath(file, comment.timestamp);
         const existingFile = await this.findExistingAnnotationFile(annotationId, expectedPath);
@@ -1775,6 +1814,17 @@ export default class SideNote extends Plugin {
 
         const currentContent = await this.app.vault.read(existingFile);
         const existingFrontmatter = (this.app.metadataCache.getFileCache(existingFile)?.frontmatter || {}) as Record<string, any>;
+        try {
+            const syncState = await this.evaluateAnnotationCommentSyncState(currentContent, existingFrontmatter, comment.comment || "");
+            if (syncState.conflict) {
+                new Notice("批注同步已阻止：annotation note 与 JSON comment 自上次同步后都已变化，请先人工确认。");
+                return "blocked";
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown parse error.";
+            new Notice("批注同步已阻止：无法解析现有 annotation 回链块。" + message);
+            return "blocked";
+        }
         const draftFrontmatter = await this.buildManagedAnnotationFrontmatter(file, comment, existingFrontmatter, { refreshSyncMetadata: false });
         const contentDraft = this.replaceBacklinkSection(currentContent, comment);
         const managedChanged = this.hasManagedFrontmatterChange(existingFrontmatter, draftFrontmatter);
@@ -1827,6 +1877,7 @@ export default class SideNote extends Plugin {
             return;
         }
 
+        await this.reloadCommentsFromDisk();
         const commentsForFile = this.commentManager.getCommentsForFile(file.path);
         if (commentsForFile.length === 0) {
             new Notice("No comments for this file yet.");
@@ -1836,6 +1887,7 @@ export default class SideNote extends Plugin {
         let created = 0;
         let updated = 0;
         let unchanged = 0;
+        let blocked = 0;
         for (const comment of commentsForFile) {
             if (!comment.selectedTextHash && comment.selectedText) {
                 comment.selectedTextHash = await generateHash(comment.selectedText);
@@ -1843,10 +1895,11 @@ export default class SideNote extends Plugin {
             const result = await this.upsertAnnotationNoteForComment(file, comment);
             if (result === "created") created++;
             else if (result === "updated") updated++;
+            else if (result === "blocked") blocked++;
             else unchanged++;
         }
 
-        new Notice(`Annotation sync complete: ${created} created, ${updated} updated, ${unchanged} unchanged.`);
+        new Notice(`Annotation sync complete: ${created} created, ${updated} updated, ${unchanged} unchanged, ${blocked} blocked.`);
     }
 
     async syncAnnotationNoteToCommentJson(file: TFile): Promise<void> {
@@ -1861,36 +1914,37 @@ export default class SideNote extends Plugin {
             return;
         }
 
+        await this.reloadCommentsFromDisk();
         const content = await this.app.vault.read(file);
         let nextCommentText = "";
         try {
             nextCommentText = this.parseAnnotationBacklinkComment(content);
         } catch (error) {
             const message = error instanceof Error ? error.message : "Unknown parse error.";
-            new Notice(`Annotation writeback blocked: ${message}`);
+            new Notice(`批注回写已阻止：${message}`);
             return;
         }
 
         const targetComment = this.comments.find((comment) => comment.timestamp === metadata.timestamp);
         if (!targetComment) {
-            new Notice("Annotation writeback blocked: target JSON comment not found.");
+            new Notice("批注回写已阻止：未找到对应的 JSON comment。");
             return;
         }
 
         const currentCommentText = targetComment.comment || "";
-        const currentCommentHash = await this.generateCommentHash(currentCommentText);
-        if (metadata.commentHashAtSync) {
-            if (metadata.commentHashAtSync !== currentCommentHash) {
-                new Notice("Annotation writeback blocked: JSON comment changed since last sync.");
-                return;
-            }
-        } else if (nextCommentText !== currentCommentText) {
-            new Notice("Annotation writeback blocked: missing comment_hash_at_sync baseline.");
+        if (nextCommentText === currentCommentText) {
+            new Notice("当前 annotation 与 JSON comment 一致，无需回写。");
             return;
         }
 
-        if (nextCommentText === currentCommentText) {
-            new Notice("Annotation writeback skipped: comment unchanged.");
+        const existingFrontmatter = (this.app.metadataCache.getFileCache(file)?.frontmatter || {}) as Record<string, any>;
+        const syncState = await this.evaluateAnnotationCommentSyncState(content, existingFrontmatter, currentCommentText);
+        if (!syncState.storedHash) {
+            new Notice("批注回写已阻止：缺少 comment_hash_at_sync baseline，无法安全覆盖。");
+            return;
+        }
+        if (syncState.conflict || syncState.jsonChangedSinceSync) {
+            new Notice("批注回写已阻止：JSON comment 自上次同步后已变化，请先重新同步或人工确认。");
             return;
         }
 
@@ -1910,7 +1964,7 @@ export default class SideNote extends Plugin {
         this.refreshViews();
         this.refreshEditorDecorations();
         this.scheduleRenderedTableHighlights();
-        new Notice("Annotation writeback complete: JSON comment updated.");
+        new Notice("批注回写完成：JSON comment 已更新。");
     }
 
     async syncCurrentFileCommentsAndAnnotations(file: TFile): Promise<void> {
@@ -1959,6 +2013,11 @@ export default class SideNote extends Plugin {
             }
         }
         return allComments;
+    }
+
+    private async reloadCommentsFromDisk(): Promise<void> {
+        this.comments = await this.loadAllCommentsFromFiles();
+        this.commentManager.updateComments(this.comments);
     }
 
     async saveAllCommentFiles(): Promise<void> {
@@ -2229,9 +2288,21 @@ export default class SideNote extends Plugin {
         }));
         this.registerEvent(this.app.vault.on('modify', async (file) => {
             if (this.isSaving) return;
-            // Ignore our own comment data files
+            // Reload per-file comment sidecars when they change outside plugin runtime.
             const dataFolder = normalizePath(this.settings.commentsDataFolder?.trim() || DEFAULT_SETTINGS.commentsDataFolder);
-            if (file.path.startsWith(dataFolder + '/')) return;
+            if (file.path.startsWith(dataFolder + '/')) {
+                if (file instanceof TFile && file.extension === 'json') {
+                    try {
+                        await this.reloadCommentsFromDisk();
+                        this.refreshViews();
+                        this.refreshEditorDecorations();
+                        this.scheduleRenderedTableHighlights();
+                    } catch (error) {
+                        console.error("Error reloading comment sidecar data:", error);
+                    }
+                }
+                return;
+            }
 
             if (file.path === '.obsidian/plugins/side-note/data.json' || (file instanceof TFile && file.name === 'data.json' && file.parent?.name === 'side-note')) {
                 try {

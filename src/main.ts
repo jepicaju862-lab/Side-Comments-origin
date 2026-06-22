@@ -206,14 +206,14 @@ class SideNoteView extends ItemView {
         exportBtn.onclick = async () => { await this.exportCommentsToMarkdown(); };
 
         const syncBtn = toolbar.createEl("button", { cls: "clickable-icon" });
-        syncBtn.setAttribute("aria-label", "Sync current file comments to annotations");
+        syncBtn.setAttribute("aria-label", "Sync current file comments and annotations");
         setIcon(syncBtn, "refresh-cw");
         syncBtn.onclick = async () => {
             if (!this.file) {
                 new Notice("No file selected.");
                 return;
             }
-            await this.plugin.syncCommentsToAnnotationsForFile(this.file);
+            await this.plugin.syncCurrentFileCommentsAndAnnotations(this.file);
         };
 
         const sortBtn = toolbar.createEl("button", { cls: "clickable-icon" });
@@ -820,14 +820,14 @@ class SideNoteSettingTab extends PluginSettingTab {
                     await this.plugin.migrateInlineCommentsToMarkdown();
                     new Notice("Markdown backup created successfully!");
                 }));
-        new Setting(containerEl).setName("Sync current file to annotations").addButton((button) =>
+        new Setting(containerEl).setName("Sync current file comments and annotations").addButton((button) =>
                 button.setButtonText("Sync Now").onClick(async () => {
                     const activeFile = this.app.workspace.getActiveFile();
                     if (!(activeFile instanceof TFile) || activeFile.extension !== "md") {
                         new Notice("No active Markdown file found.");
                         return;
                     }
-                    await this.plugin.syncCommentsToAnnotationsForFile(activeFile);
+                    await this.plugin.syncCurrentFileCommentsAndAnnotations(activeFile);
                 }));
         const orphanedCount = this.plugin.commentManager.getOrphanedCommentCount();
         new Setting(containerEl).setName("Orphaned comments").setDesc(`There are ${orphanedCount} orphaned comment(s).`);
@@ -1534,6 +1534,27 @@ export default class SideNote extends Plugin {
         return `${this.getAnnotationFolderPath(file)}/${sourceKey}_ann_${timestamp}.md`;
     }
 
+    private getManagedAnnotationMetadata(file: TFile): {
+        annotationId: string;
+        timestamp: number;
+        commentHashAtSync: string;
+    } | null {
+        const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, any> | undefined;
+        const annotationId = typeof frontmatter?.annotation_id === "string" ? frontmatter.annotation_id : "";
+        const sideComments = (frontmatter?.side_comments || {}) as Record<string, any>;
+        const timestamp = typeof sideComments.timestamp === "number"
+            ? sideComments.timestamp
+            : Number(sideComments.timestamp);
+        if (frontmatter?.type !== "annotation") return null;
+        if (!annotationId.startsWith("side-comments:")) return null;
+        if (!Number.isInteger(timestamp)) return null;
+        return {
+            annotationId,
+            timestamp,
+            commentHashAtSync: typeof sideComments.comment_hash_at_sync === "string" ? sideComments.comment_hash_at_sync : "",
+        };
+    }
+
     private buildBacklinkCallout(comment: Comment): string {
         const quoteText = (text: string, prefix: string) => {
             return text.split("\n").map((line) => prefix + line).join("\n");
@@ -1578,6 +1599,30 @@ export default class SideNote extends Plugin {
         }
 
         return `${section}\n\n${stripManagedSection(content)}`;
+    }
+
+    private parseAnnotationBacklinkComment(content: string): string {
+        const startIndex = content.indexOf(CONTROLLED_BLOCK_START);
+        const endIndex = content.indexOf(CONTROLLED_BLOCK_END);
+        if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+            throw new Error("Controlled backlink block not found.");
+        }
+
+        const block = content.slice(startIndex + CONTROLLED_BLOCK_START.length, endIndex);
+        const lines = block.split(/\r?\n/);
+        const commentHeadingIndex = lines.findIndex((line) => line.trim() === "> **批注**：");
+        if (commentHeadingIndex === -1) {
+            throw new Error("Controlled comment heading not found.");
+        }
+
+        const commentLines = lines.slice(commentHeadingIndex + 1).map((line) => {
+            if (line === ">") return "";
+            if (line.startsWith("> ")) return line.slice(2);
+            if (line.startsWith(">")) return line.slice(1);
+            return line;
+        });
+        const commentText = commentLines.join("\n");
+        return commentText === "（无）" ? "" : commentText;
     }
 
     private async findExistingAnnotationFile(annotationId: string, expectedPath: string): Promise<TFile | null> {
@@ -1802,6 +1847,79 @@ export default class SideNote extends Plugin {
         }
 
         new Notice(`Annotation sync complete: ${created} created, ${updated} updated, ${unchanged} unchanged.`);
+    }
+
+    async syncAnnotationNoteToCommentJson(file: TFile): Promise<void> {
+        if (!(file instanceof TFile) || file.extension !== "md") {
+            new Notice("No active Markdown file found.");
+            return;
+        }
+
+        const metadata = this.getManagedAnnotationMetadata(file);
+        if (!metadata) {
+            new Notice("Current file is not a managed Side Comments annotation note.");
+            return;
+        }
+
+        const content = await this.app.vault.read(file);
+        let nextCommentText = "";
+        try {
+            nextCommentText = this.parseAnnotationBacklinkComment(content);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown parse error.";
+            new Notice(`Annotation writeback blocked: ${message}`);
+            return;
+        }
+
+        const targetComment = this.comments.find((comment) => comment.timestamp === metadata.timestamp);
+        if (!targetComment) {
+            new Notice("Annotation writeback blocked: target JSON comment not found.");
+            return;
+        }
+
+        const currentCommentText = targetComment.comment || "";
+        const currentCommentHash = await this.generateCommentHash(currentCommentText);
+        if (metadata.commentHashAtSync) {
+            if (metadata.commentHashAtSync !== currentCommentHash) {
+                new Notice("Annotation writeback blocked: JSON comment changed since last sync.");
+                return;
+            }
+        } else if (nextCommentText !== currentCommentText) {
+            new Notice("Annotation writeback blocked: missing comment_hash_at_sync baseline.");
+            return;
+        }
+
+        if (nextCommentText === currentCommentText) {
+            new Notice("Annotation writeback skipped: comment unchanged.");
+            return;
+        }
+
+        this.commentManager.editComment(metadata.timestamp, nextCommentText);
+        await this.saveCommentsForSingleFile(targetComment.filePath);
+
+        const now = new Date();
+        const nextCommentHash = await this.generateCommentHash(nextCommentText);
+        await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+            const sideComments = ((frontmatter.side_comments || {}) as Record<string, any>);
+            sideComments.comment_hash_at_sync = nextCommentHash;
+            sideComments.synced_at = this.getLocalIsoString(now);
+            frontmatter.side_comments = sideComments;
+            frontmatter.updated = this.getLocalDateString(now);
+        });
+
+        this.refreshViews();
+        this.refreshEditorDecorations();
+        this.scheduleRenderedTableHighlights();
+        new Notice("Annotation writeback complete: JSON comment updated.");
+    }
+
+    async syncCurrentFileCommentsAndAnnotations(file: TFile): Promise<void> {
+        const metadata = this.getManagedAnnotationMetadata(file);
+        if (metadata) {
+            await this.syncAnnotationNoteToCommentJson(file);
+            return;
+        }
+        await this.syncCommentsToAnnotationsForFile(file);
     }
 
     // --- Per-file comment storage ---
@@ -2038,7 +2156,7 @@ export default class SideNote extends Plugin {
         this.addCommand({ id: "activate-view", name: "在侧边栏打开批注视图", callback: () => this.activateView() });
         this.addCommand({
             id: "sync-current-file-comments-to-annotations",
-            name: "同步当前笔记批注到 Annotations",
+            name: "同步当前文件批注与 Annotations",
             icon: "refresh-cw",
             callback: async () => {
                 const activeFile = this.app.workspace.getActiveFile();
@@ -2046,7 +2164,7 @@ export default class SideNote extends Plugin {
                     new Notice("No active Markdown file found.");
                     return;
                 }
-                await this.syncCommentsToAnnotationsForFile(activeFile);
+                await this.syncCurrentFileCommentsAndAnnotations(activeFile);
             }
         });
         

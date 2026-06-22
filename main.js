@@ -1795,8 +1795,63 @@ class SideNote extends obsidian_1.Plugin {
         }
         return null;
     }
-    async buildManagedAnnotationFrontmatter(file, comment, existingFrontmatter) {
+    getComparableManagedFrontmatter(frontmatter) {
+        const locator = (frontmatter?.locator || {});
+        const sideComments = (frontmatter?.side_comments || {});
+        const comparable = {
+            type: frontmatter?.type,
+            status: frontmatter?.status,
+            annotation_status: frontmatter?.annotation_status,
+            source: frontmatter?.source,
+            source_key: frontmatter?.source_key,
+            source_type: frontmatter?.source_type,
+            category_major: frontmatter?.category_major,
+            category_minor: frontmatter?.category_minor,
+            stage: frontmatter?.stage,
+            targets: Array.isArray(frontmatter?.targets) ? frontmatter.targets : [],
+            locator: {
+                filePath: locator.filePath,
+                headingPath: Array.isArray(locator.headingPath) ? locator.headingPath : [],
+                startLine: locator.startLine,
+                startChar: locator.startChar,
+                endLine: locator.endLine,
+                endChar: locator.endChar,
+            },
+            quote_hash: frontmatter?.quote_hash,
+            annotation_id: frontmatter?.annotation_id,
+            side_comments: {
+                timestamp: sideComments.timestamp,
+                source_json: sideComments.source_json,
+                occurrenceIndex: sideComments.occurrenceIndex,
+                markType: sideComments.markType,
+                color: sideComments.color,
+                isOrphaned: Boolean(sideComments.isOrphaned),
+                comment_hash_at_sync: sideComments.comment_hash_at_sync,
+            },
+            created: frontmatter?.created,
+        };
+        if (frontmatter && Object.prototype.hasOwnProperty.call(frontmatter, "page") && frontmatter.page != null) {
+            comparable.page = frontmatter.page;
+        }
+        return comparable;
+    }
+    hasManagedFrontmatterChange(existingFrontmatter, nextFrontmatter) {
+        return this.needsManagedFrontmatterCleanup(existingFrontmatter)
+            || JSON.stringify(this.getComparableManagedFrontmatter(existingFrontmatter)) !== JSON.stringify(this.getComparableManagedFrontmatter(nextFrontmatter));
+    }
+    needsManagedFrontmatterCleanup(frontmatter) {
+        if (!frontmatter)
+            return false;
+        if (Object.prototype.hasOwnProperty.call(frontmatter, "page") && frontmatter.page == null) {
+            return true;
+        }
+        const sideComments = (frontmatter.side_comments || {});
+        return Object.prototype.hasOwnProperty.call(sideComments, "filePath")
+            || Object.prototype.hasOwnProperty.call(sideComments, "selectedTextHash");
+    }
+    async buildManagedAnnotationFrontmatter(file, comment, existingFrontmatter, options) {
         const now = new Date();
+        const commentCreatedAt = new Date(comment.timestamp);
         const sourceKey = this.getSourceKey(file);
         const mappedCategory = this.getCategoryForColor(comment.color);
         const existingCategory = existingFrontmatter?.category_major;
@@ -1805,7 +1860,8 @@ class SideNote extends obsidian_1.Plugin {
         const noteStatus = comment.isOrphaned ? "review" : "active";
         const selectedTextHash = comment.selectedTextHash || await generateHash(comment.selectedText || "");
         const commentHash = await this.generateCommentHash(comment.comment || "");
-        return {
+        const refreshSyncMetadata = options?.refreshSyncMetadata ?? true;
+        const frontmatter = {
             type: "annotation",
             status: noteStatus,
             annotation_status: annotationStatus,
@@ -1816,7 +1872,6 @@ class SideNote extends obsidian_1.Plugin {
             category_minor: existingFrontmatter?.category_minor ?? "",
             stage: existingFrontmatter?.stage || "captured",
             targets: Array.isArray(existingFrontmatter?.targets) ? existingFrontmatter.targets : [],
-            page: existingFrontmatter && Object.prototype.hasOwnProperty.call(existingFrontmatter, "page") ? existingFrontmatter.page : null,
             locator: {
                 filePath: comment.filePath,
                 headingPath: comment.headingPath || [],
@@ -1830,18 +1885,26 @@ class SideNote extends obsidian_1.Plugin {
             side_comments: {
                 timestamp: comment.timestamp,
                 source_json: this.getCommentsJsonPath(comment.filePath),
-                filePath: comment.filePath,
-                selectedTextHash,
                 occurrenceIndex: typeof comment.occurrenceIndex === "number" ? comment.occurrenceIndex : 0,
                 markType: comment.markType || "highlight",
                 color: comment.color || "",
                 isOrphaned: Boolean(comment.isOrphaned),
                 comment_hash_at_sync: commentHash,
-                synced_at: this.getLocalIsoString(now),
             },
-            created: existingFrontmatter?.created || this.getLocalDateString(now),
-            updated: this.getLocalDateString(now),
+            created: this.getLocalDateString(commentCreatedAt),
         };
+        if (existingFrontmatter && Object.prototype.hasOwnProperty.call(existingFrontmatter, "page") && existingFrontmatter.page != null) {
+            frontmatter.page = existingFrontmatter.page;
+        }
+        if (refreshSyncMetadata) {
+            frontmatter.side_comments.synced_at = this.getLocalIsoString(now);
+            frontmatter.updated = this.getLocalDateString(now);
+        }
+        else {
+            frontmatter.side_comments.synced_at = existingFrontmatter?.side_comments?.synced_at || this.getLocalIsoString(now);
+            frontmatter.updated = existingFrontmatter?.updated || this.getLocalDateString(now);
+        }
+        return frontmatter;
     }
     buildAnnotationNoteContent(frontmatter, comment) {
         return `---\n${(0, obsidian_1.stringifyYaml)(frontmatter)}---\n\n${this.buildNewAnnotationBody(comment)}`;
@@ -1857,16 +1920,47 @@ class SideNote extends obsidian_1.Plugin {
             await this.app.vault.create(expectedPath, content);
             return "created";
         }
+        const currentContent = await this.app.vault.read(existingFile);
         const existingFrontmatter = (this.app.metadataCache.getFileCache(existingFile)?.frontmatter || {});
-        const next = await this.buildManagedAnnotationFrontmatter(file, comment, existingFrontmatter);
+        const draftFrontmatter = await this.buildManagedAnnotationFrontmatter(file, comment, existingFrontmatter, { refreshSyncMetadata: false });
+        const contentDraft = this.replaceBacklinkSection(currentContent, comment);
+        const managedChanged = this.hasManagedFrontmatterChange(existingFrontmatter, draftFrontmatter);
+        const contentChanged = contentDraft !== currentContent;
+        if (!managedChanged && !contentChanged) {
+            return "noop";
+        }
+        const next = await this.buildManagedAnnotationFrontmatter(file, comment, existingFrontmatter, { refreshSyncMetadata: true });
+        const managedKeys = new Set([
+            "type",
+            "status",
+            "annotation_status",
+            "source",
+            "source_key",
+            "source_type",
+            "category_major",
+            "category_minor",
+            "stage",
+            "targets",
+            "page",
+            "locator",
+            "quote_hash",
+            "annotation_id",
+            "side_comments",
+            "created",
+            "updated",
+        ]);
         await this.app.fileManager.processFrontMatter(existingFile, (frontmatter) => {
-            for (const [key, value] of Object.entries(next)) {
-                frontmatter[key] = value;
+            for (const key of managedKeys) {
+                if (Object.prototype.hasOwnProperty.call(next, key)) {
+                    frontmatter[key] = next[key];
+                }
+                else {
+                    delete frontmatter[key];
+                }
             }
         });
-        const currentContent = await this.app.vault.read(existingFile);
         const updatedContent = this.replaceBacklinkSection(currentContent, comment);
-        if (updatedContent !== currentContent) {
+        if (contentChanged) {
             await this.app.vault.modify(existingFile, updatedContent);
         }
         return "updated";
@@ -1883,6 +1977,7 @@ class SideNote extends obsidian_1.Plugin {
         }
         let created = 0;
         let updated = 0;
+        let unchanged = 0;
         for (const comment of commentsForFile) {
             if (!comment.selectedTextHash && comment.selectedText) {
                 comment.selectedTextHash = await generateHash(comment.selectedText);
@@ -1890,10 +1985,12 @@ class SideNote extends obsidian_1.Plugin {
             const result = await this.upsertAnnotationNoteForComment(file, comment);
             if (result === "created")
                 created++;
-            else
+            else if (result === "updated")
                 updated++;
+            else
+                unchanged++;
         }
-        new obsidian_1.Notice(`Annotation sync complete: ${created} created, ${updated} updated.`);
+        new obsidian_1.Notice(`Annotation sync complete: ${created} created, ${updated} updated, ${unchanged} unchanged.`);
     }
     // --- Per-file comment storage ---
     getCommentsJsonPath(notePath) {

@@ -77,6 +77,11 @@ interface TableBlock {
     endLine: number;
 }
 
+type AnnotationSyncBlockedReason = "conflict" | "parse_error";
+type AnnotationUpsertResult =
+    | { status: "created" | "updated" | "noop" }
+    | { status: "blocked"; reason: AnnotationSyncBlockedReason; detail?: string };
+
 const DEFAULT_SETTINGS: SideNoteSettings = {
     commentSortOrder: "position",
     showHighlights: true,
@@ -1799,7 +1804,20 @@ export default class SideNote extends Plugin {
         return `---\n${stringifyYaml(frontmatter)}---\n\n${this.buildNewAnnotationBody(comment)}`;
     }
 
-    private async upsertAnnotationNoteForComment(file: TFile, comment: Comment): Promise<"created" | "updated" | "noop" | "blocked"> {
+    private buildAnnotationSyncSummaryMessage(
+        created: number,
+        updated: number,
+        unchanged: number,
+        blockedByReason: Record<AnnotationSyncBlockedReason, number>
+    ): string {
+        const blocked = blockedByReason.conflict + blockedByReason.parse_error;
+        const blockedSuffix = blocked > 0
+            ? ` (conflict: ${blockedByReason.conflict}, parse_error: ${blockedByReason.parse_error})`
+            : "";
+        return `Annotation sync complete: ${created} created, ${updated} updated, ${unchanged} unchanged, ${blocked} blocked${blockedSuffix}.`;
+    }
+
+    private async upsertAnnotationNoteForComment(file: TFile, comment: Comment): Promise<AnnotationUpsertResult> {
         const annotationId = `side-comments:${comment.timestamp}`;
         const expectedPath = this.getExpectedAnnotationPath(file, comment.timestamp);
         const existingFile = await this.findExistingAnnotationFile(annotationId, expectedPath);
@@ -1809,7 +1827,7 @@ export default class SideNote extends Plugin {
             const frontmatter = await this.buildManagedAnnotationFrontmatter(file, comment);
             const content = this.buildAnnotationNoteContent(frontmatter, comment);
             await this.app.vault.create(expectedPath, content);
-            return "created";
+            return { status: "created" };
         }
 
         const currentContent = await this.app.vault.read(existingFile);
@@ -1817,13 +1835,18 @@ export default class SideNote extends Plugin {
         try {
             const syncState = await this.evaluateAnnotationCommentSyncState(currentContent, existingFrontmatter, comment.comment || "");
             if (syncState.conflict) {
-                new Notice("批注同步已阻止：annotation note 与 JSON comment 自上次同步后都已变化，请先人工确认。");
-                return "blocked";
+                return {
+                    status: "blocked",
+                    reason: "conflict",
+                };
             }
         } catch (error) {
             const message = error instanceof Error ? error.message : "Unknown parse error.";
-            new Notice("批注同步已阻止：无法解析现有 annotation 回链块。" + message);
-            return "blocked";
+            return {
+                status: "blocked",
+                reason: "parse_error",
+                detail: message,
+            };
         }
         const draftFrontmatter = await this.buildManagedAnnotationFrontmatter(file, comment, existingFrontmatter, { refreshSyncMetadata: false });
         const contentDraft = this.replaceBacklinkSection(currentContent, comment);
@@ -1831,7 +1854,7 @@ export default class SideNote extends Plugin {
         const contentChanged = contentDraft !== currentContent;
 
         if (!managedChanged && !contentChanged) {
-            return "noop";
+            return { status: "noop" };
         }
 
         const next = await this.buildManagedAnnotationFrontmatter(file, comment, existingFrontmatter, { refreshSyncMetadata: true });
@@ -1868,7 +1891,7 @@ export default class SideNote extends Plugin {
         if (contentChanged) {
             await this.app.vault.modify(existingFile, updatedContent);
         }
-        return "updated";
+        return { status: "updated" };
     }
 
     async syncCommentsToAnnotationsForFile(file: TFile): Promise<void> {
@@ -1887,19 +1910,30 @@ export default class SideNote extends Plugin {
         let created = 0;
         let updated = 0;
         let unchanged = 0;
-        let blocked = 0;
+        const blockedByReason: Record<AnnotationSyncBlockedReason, number> = {
+            conflict: 0,
+            parse_error: 0,
+        };
         for (const comment of commentsForFile) {
             if (!comment.selectedTextHash && comment.selectedText) {
                 comment.selectedTextHash = await generateHash(comment.selectedText);
             }
             const result = await this.upsertAnnotationNoteForComment(file, comment);
-            if (result === "created") created++;
-            else if (result === "updated") updated++;
-            else if (result === "blocked") blocked++;
-            else unchanged++;
+            if (result.status === "created") created++;
+            else if (result.status === "updated") updated++;
+            else if (result.status === "blocked") {
+                blockedByReason[result.reason]++;
+                if (result.detail) {
+                    console.warn("Annotation sync blocked detail:", {
+                        timestamp: comment.timestamp,
+                        reason: result.reason,
+                        detail: result.detail,
+                    });
+                }
+            } else unchanged++;
         }
 
-        new Notice(`Annotation sync complete: ${created} created, ${updated} updated, ${unchanged} unchanged, ${blocked} blocked.`);
+        new Notice(this.buildAnnotationSyncSummaryMessage(created, updated, unchanged, blockedByReason));
     }
 
     async syncAnnotationNoteToCommentJson(file: TFile): Promise<void> {

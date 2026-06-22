@@ -2725,7 +2725,3 @@ export default class SideNote extends Plugin {
         return [highlightPlugin, commentTooltip];
     }
 }
-
-if (typeof module !== "undefined" && module && module.exports) {
-    module.exports = SideNote;
-}

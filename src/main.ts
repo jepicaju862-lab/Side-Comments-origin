@@ -1480,6 +1480,10 @@ export default class SideNote extends Plugin {
         return generateHash(this.normalizeCommentForHash(commentText));
     }
 
+    private async areCommentsSemanticallyEqual(left: string, right: string): Promise<boolean> {
+        return (await this.generateCommentHash(left)) === (await this.generateCommentHash(right));
+    }
+
     private getLocalDateString(date: Date): string {
         const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -1966,8 +1970,10 @@ export default class SideNote extends Plugin {
         }
 
         const currentCommentText = targetComment.comment || "";
-        if (nextCommentText === currentCommentText) {
-            new Notice("当前 annotation 与 JSON comment 一致，无需回写。");
+        const nextCommentHash = await this.generateCommentHash(nextCommentText);
+        const currentCommentHash = await this.generateCommentHash(currentCommentText);
+        if (nextCommentHash === currentCommentHash) {
+            new Notice("当前 annotation 与 JSON comment 在规范化后内容一致，无需回写。");
             return;
         }
 
@@ -1986,7 +1992,6 @@ export default class SideNote extends Plugin {
         await this.saveCommentsForSingleFile(targetComment.filePath);
 
         const now = new Date();
-        const nextCommentHash = await this.generateCommentHash(nextCommentText);
         await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
             const sideComments = ((frontmatter.side_comments || {}) as Record<string, any>);
             sideComments.comment_hash_at_sync = nextCommentHash;

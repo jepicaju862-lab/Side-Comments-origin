@@ -1,0 +1,21 @@
+{
+  "name": "side-comments-origin",
+  "version": "1.0.3",
+  "private": true,
+  "description": "Local development tooling for the Side Comments Obsidian plugin.",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "check": "tsc --noEmit --skipLibCheck",
+    "version-sync": "node scripts/version-sync.mjs"
+  },
+  "devDependencies": {
+    "@codemirror/state": "6.5.0",
+    "@codemirror/view": "^6.38.6",
+    "@types/node": "^24.0.10",
+    "builtin-modules": "^5.0.0",
+    "esbuild": "^0.25.6",
+    "obsidian": "^1.8.10",
+    "typescript": "^5.8.3"
+  }
+}

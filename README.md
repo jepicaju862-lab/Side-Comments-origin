@@ -76,6 +76,50 @@ A sidebar annotation and commenting plugin for Obsidian. Side Comments allows yo
 
 ---
 
+## 🧪 Development
+
+This repository now includes a minimal local build setup for contributors.
+
+### Prerequisites
+
+* Node.js 22+
+* npm 10+
+
+### Local Setup
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Run a type check:
+
+```bash
+npm run check
+```
+
+3. Build the plugin bundle:
+
+```bash
+npm run build
+```
+
+4. During active development, run watch mode:
+
+```bash
+npm run dev
+```
+
+### Notes
+
+* `src/` contains the TypeScript source files.
+* `main.js` is the generated plugin bundle committed for distribution.
+* `manifest.json` remains the source of truth for the plugin version.
+* `npm run version-sync` updates `package.json` to match `manifest.json`.
+
+---
+
 ## 🖊️ Usage
 
 ### Add a Comment

@@ -72,6 +72,50 @@
 
 ---
 
+## 🧪 本地开发
+
+仓库现已补齐最小可用的本地构建环境，便于继续二次开发。
+
+### 环境要求
+
+- Node.js 22+
+- npm 10+
+
+### 初始化
+
+1. 安装依赖：
+
+```bash
+npm install
+```
+
+2. 执行类型检查：
+
+```bash
+npm run check
+```
+
+3. 构建插件产物：
+
+```bash
+npm run build
+```
+
+4. 开发时使用监听模式：
+
+```bash
+npm run dev
+```
+
+### 说明
+
+- `src/` 为 TypeScript 源码目录
+- `main.js` 为提交到仓库的构建产物
+- `manifest.json` 仍然是插件版本号的事实来源
+- `npm run version-sync` 可将 `package.json` 版本同步到 `manifest.json`
+
+---
+
 ## 🖊️ 使用方法
 
 ### 添加评论

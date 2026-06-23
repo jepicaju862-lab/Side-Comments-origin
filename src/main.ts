@@ -399,6 +399,13 @@ class SideNoteView extends ItemView {
                     this.plugin.copyBacklink(comment);
                 };
 
+                const openAnnotationOption = menuContainer.createEl("button", { text: "打开 Annotation", cls: "sidenote-menu-option" });
+                openAnnotationOption.onclick = async (e) => {
+                    e.stopPropagation();
+                    menuContainer.classList.remove("visible");
+                    await this.plugin.openAnnotationNoteForComment(comment);
+                };
+
                 const searchOption = menuContainer.createEl("button", { text: "在库中搜索", cls: "sidenote-menu-option" });
                 searchOption.onclick = (e) => {
                     e.stopPropagation();
@@ -1879,6 +1886,24 @@ export default class SideNote extends Plugin {
             if (frontmatter?.annotation_id === annotationId) return candidate;
         }
         return null;
+    }
+
+    private async findAnnotationFileForComment(comment: Comment): Promise<TFile | null> {
+        const annotationId = `side-comments:${comment.timestamp}`;
+        const sourceFile = this.app.vault.getAbstractFileByPath(comment.filePath);
+        const expectedPath = sourceFile instanceof TFile
+            ? this.getExpectedAnnotationPath(sourceFile, comment.timestamp)
+            : "";
+        return this.findExistingAnnotationFile(annotationId, expectedPath);
+    }
+
+    async openAnnotationNoteForComment(comment: Comment): Promise<void> {
+        const annotationFile = await this.findAnnotationFileForComment(comment);
+        if (!annotationFile) {
+            new Notice("还没有 annotation，请同步生成。");
+            return;
+        }
+        await this.app.workspace.getLeaf(true).openFile(annotationFile);
     }
 
     private getComparableManagedFrontmatter(frontmatter?: Record<string, any>): Record<string, any> {

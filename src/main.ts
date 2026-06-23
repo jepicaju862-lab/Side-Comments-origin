@@ -48,6 +48,13 @@ interface CustomViewState extends Record<string, unknown> {
     filePath: string | null;
 }
 
+type AnnotationPathStrategy = "group_by_source_key" | "mirror_source_tree";
+
+interface AnnotationCategoryMapping {
+    category: string;
+    color: string;
+}
+
 interface SideNoteSettings {
     commentSortOrder: "timestamp" | "position";
     showHighlights: boolean;
@@ -58,6 +65,8 @@ interface SideNoteSettings {
     enableSelectionToolbar: boolean;
     commentsDataFolder: string;
     annotationOutputFolder: string;
+    annotationPathStrategy: AnnotationPathStrategy;
+    annotationCategoryMappings: AnnotationCategoryMapping[];
 }
 
 interface PluginData extends SideNoteSettings {
@@ -82,6 +91,14 @@ type AnnotationUpsertResult =
     | { status: "created" | "updated" | "noop" }
     | { status: "blocked"; reason: AnnotationSyncBlockedReason; detail?: string };
 
+const DEFAULT_ANNOTATION_CATEGORY_MAPPINGS: AnnotationCategoryMapping[] = [
+    { category: "不足和展望", color: "#8b5cf6" },
+    { category: "结论、创新与优点", color: "#ec4899" },
+    { category: "结果", color: "#3b82f6" },
+    { category: "方法、技术及参数", color: "#10b981" },
+    { category: "背景和问题", color: "#f59e0b" },
+];
+
 const DEFAULT_SETTINGS: SideNoteSettings = {
     commentSortOrder: "position",
     showHighlights: true,
@@ -92,6 +109,8 @@ const DEFAULT_SETTINGS: SideNoteSettings = {
     enableSelectionToolbar: true,
     commentsDataFolder: "side-note-data",
     annotationOutputFolder: "20_Notes/Annotations",
+    annotationPathStrategy: "group_by_source_key",
+    annotationCategoryMappings: DEFAULT_ANNOTATION_CATEGORY_MAPPINGS,
 };
 
 const DEFAULT_SOURCE_TYPE = "other";
@@ -570,13 +589,7 @@ class CommentModal extends Modal {
         
         // Colors
         const colorsWrapper = footer.createDiv("sidenote-edit-modal-colors");
-        const presetColors = [
-            { name: 'Purple', value: '#8b5cf6' },
-            { name: 'Pink', value: '#ec4899' },
-            { name: 'Blue', value: '#3b82f6' },
-            { name: 'Green', value: '#10b981' },
-            { name: 'Yellow', value: '#f59e0b' }
-        ];
+        const presetColors = this.plugin.getPresetAnnotationColors();
 
         let activeCircle: HTMLElement | null = null;
         const updateActiveCircle = (circle: HTMLElement | null) => {
@@ -754,6 +767,70 @@ class SideNoteSettingTab extends PluginSettingTab {
     plugin: SideNote;
     constructor(app: App, plugin: SideNote) { super(app, plugin); }
 
+    private async updateAnnotationCategoryMapping(index: number, patch: Partial<AnnotationCategoryMapping>): Promise<void> {
+        const next = this.plugin.getAnnotationCategoryMappings();
+        next[index] = {
+            ...next[index],
+            ...patch,
+        };
+        this.plugin.settings.annotationCategoryMappings = next;
+        await this.plugin.saveData();
+    }
+
+    private async removeAnnotationCategoryMapping(index: number): Promise<void> {
+        const next = this.plugin.getAnnotationCategoryMappings();
+        if (next.length <= 1) {
+            new Notice("至少保留一条分类映射。");
+            return;
+        }
+        next.splice(index, 1);
+        this.plugin.settings.annotationCategoryMappings = next;
+        await this.plugin.saveData();
+        this.display();
+    }
+
+    private renderAnnotationCategoryMappings(containerEl: HTMLElement): void {
+        const mappings = this.plugin.getAnnotationCategoryMappings();
+        mappings.forEach((mapping, index) => {
+            new Setting(containerEl)
+                .setName(`映射 ${index + 1}`)
+                .setDesc(index === 0 ? "颜色与 category_major 的对应关系；设置顺序同时作为默认调色板顺序。" : "")
+                .addColorPicker((colorPicker) =>
+                    colorPicker.setValue(mapping.color).onChange(async (value: string) => {
+                        await this.updateAnnotationCategoryMapping(index, { color: value.toLowerCase() });
+                    }))
+                .addText((text) =>
+                    text.setPlaceholder(FALLBACK_CATEGORY).setValue(mapping.category).onChange(async (value) => {
+                        await this.updateAnnotationCategoryMapping(index, { category: value.trim() || FALLBACK_CATEGORY });
+                    }))
+                .addButton((button) =>
+                    button.setButtonText("删除").onClick(async () => {
+                        await this.removeAnnotationCategoryMapping(index);
+                    }));
+        });
+
+        new Setting(containerEl)
+            .setName("分类映射操作")
+            .setDesc("新增或重置默认分类颜色组。")
+            .addButton((button) =>
+                button.setButtonText("新增映射").onClick(async () => {
+                    const next = this.plugin.getAnnotationCategoryMappings();
+                    next.push({
+                        category: `分类 ${next.length + 1}`,
+                        color: "#999999",
+                    });
+                    this.plugin.settings.annotationCategoryMappings = next;
+                    await this.plugin.saveData();
+                    this.display();
+                }))
+            .addButton((button) =>
+                button.setButtonText("恢复默认").onClick(async () => {
+                    this.plugin.settings.annotationCategoryMappings = this.plugin.getDefaultAnnotationCategoryMappings();
+                    await this.plugin.saveData();
+                    this.display();
+                }));
+    }
+
     display(): void {
         const { containerEl } = this;
         containerEl.empty();
@@ -815,11 +892,27 @@ class SideNoteSettingTab extends PluginSettingTab {
                     this.plugin.settings.commentsDataFolder = value.trim() || "side-note-data";
                     await this.plugin.saveData();
                 }));
+        containerEl.createEl("h3", { text: "Annotation Sync 设置" });
+        containerEl.createEl("p", {
+            text: "自定义 annotation note 的输出目录、路径规则，以及分类颜色映射。",
+            cls: "setting-item-description"
+        });
         new Setting(containerEl).setName("Annotation output folder").setDesc("Vault folder for annotation notes generated from Side Comments.").addText((text) =>
                 text.setPlaceholder("20_Notes/Annotations").setValue(this.plugin.settings.annotationOutputFolder || "").onChange(async (value) => {
                     this.plugin.settings.annotationOutputFolder = value.trim() || DEFAULT_SETTINGS.annotationOutputFolder;
                     await this.plugin.saveData();
                 }));
+        new Setting(containerEl).setName("Annotation path strategy").setDesc("Choose whether generated annotation notes only group by source key, or also mirror the source note folder tree.")
+            .addDropdown((dropdown) =>
+                dropdown
+                    .addOption("group_by_source_key", "Group by source key (default)")
+                    .addOption("mirror_source_tree", "Mirror source folder tree")
+                    .setValue(this.plugin.getAnnotationPathStrategy())
+                    .onChange(async (value: AnnotationPathStrategy) => {
+                        this.plugin.settings.annotationPathStrategy = value;
+                        await this.plugin.saveData();
+                    }));
+        this.renderAnnotationCategoryMappings(containerEl);
         new Setting(containerEl).setName("Create Markdown Backup").addButton((button) =>
                 button.setButtonText("Create Backup").onClick(async () => {
                     await this.plugin.migrateInlineCommentsToMarkdown();
@@ -1524,9 +1617,65 @@ export default class SideNote extends Plugin {
         }
     }
 
+    private normalizeHexColor(value: unknown, fallback: string): string {
+        if (typeof value !== "string") return fallback;
+        const normalized = value.trim().toLowerCase();
+        return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : fallback;
+    }
+
+    public getDefaultAnnotationCategoryMappings(): AnnotationCategoryMapping[] {
+        return DEFAULT_ANNOTATION_CATEGORY_MAPPINGS.map((mapping) => ({ ...mapping }));
+    }
+
+    private sanitizeAnnotationCategoryMappings(rawMappings: unknown): AnnotationCategoryMapping[] {
+        const defaults = this.getDefaultAnnotationCategoryMappings();
+        if (!Array.isArray(rawMappings) || rawMappings.length === 0) {
+            return defaults;
+        }
+        return rawMappings.map((rawMapping, index) => {
+            const fallback = defaults[Math.min(index, defaults.length - 1)] || defaults[0];
+            const candidate = (rawMapping && typeof rawMapping === "object") ? rawMapping as Record<string, unknown> : {};
+            const category = typeof candidate.category === "string" && candidate.category.trim().length > 0
+                ? candidate.category.trim()
+                : fallback.category;
+            const color = this.normalizeHexColor(candidate.color, fallback.color);
+            return { category, color };
+        });
+    }
+
+    public getAnnotationCategoryMappings(): AnnotationCategoryMapping[] {
+        return this.sanitizeAnnotationCategoryMappings(this.settings.annotationCategoryMappings);
+    }
+
+    public getPresetAnnotationColors(): Array<{ name: string; value: string }> {
+        return this.getAnnotationCategoryMappings().map((mapping) => ({
+            name: mapping.category,
+            value: mapping.color,
+        }));
+    }
+
+    public getAnnotationPathStrategy(): AnnotationPathStrategy {
+        return this.settings.annotationPathStrategy === "mirror_source_tree"
+            ? "mirror_source_tree"
+            : "group_by_source_key";
+    }
+
+    private getAnnotationOutputRoot(): string {
+        return normalizePath(this.settings.annotationOutputFolder?.trim() || DEFAULT_SETTINGS.annotationOutputFolder);
+    }
+
+    private getSourceRelativeParentPath(file: TFile): string {
+        const parentPath = file.parent?.path;
+        if (!parentPath || parentPath === "/") return "";
+        return normalizePath(parentPath);
+    }
+
     private getCategoryForColor(color?: string): string {
         if (!color) return FALLBACK_CATEGORY;
-        return COLOR_CATEGORY_MAP[color.toLowerCase()] || FALLBACK_CATEGORY;
+        const normalizedColor = color.toLowerCase();
+        const configured = this.getAnnotationCategoryMappings().find((mapping) => mapping.color.toLowerCase() === normalizedColor);
+        if (configured) return configured.category;
+        return COLOR_CATEGORY_MAP[normalizedColor] || FALLBACK_CATEGORY;
     }
 
     private getSourceKey(file: TFile): string {
@@ -1534,8 +1683,13 @@ export default class SideNote extends Plugin {
     }
 
     private getAnnotationFolderPath(file: TFile): string {
-        const root = normalizePath(this.settings.annotationOutputFolder?.trim() || DEFAULT_SETTINGS.annotationOutputFolder);
-        return `${root}/${this.getSourceKey(file)}`;
+        const root = this.getAnnotationOutputRoot();
+        const sourceKey = this.getSourceKey(file);
+        if (this.getAnnotationPathStrategy() === "mirror_source_tree") {
+            const relativeParent = this.getSourceRelativeParentPath(file);
+            return relativeParent ? `${root}/${relativeParent}/${sourceKey}` : `${root}/${sourceKey}`;
+        }
+        return `${root}/${sourceKey}`;
     }
 
     private getExpectedAnnotationPath(file: TFile, timestamp: number): string {
@@ -1677,8 +1831,7 @@ export default class SideNote extends Plugin {
         const expected = this.app.vault.getAbstractFileByPath(expectedPath);
         if (expected instanceof TFile) return expected;
 
-        const annotationRoot = normalizePath(this.settings.annotationOutputFolder?.trim() || DEFAULT_SETTINGS.annotationOutputFolder);
-        const candidates = this.app.vault.getMarkdownFiles().filter((file) => file.path.startsWith(`${annotationRoot}/`));
+        const candidates = this.app.vault.getMarkdownFiles();
         for (const candidate of candidates) {
             const frontmatter = this.app.metadataCache.getFileCache(candidate)?.frontmatter;
             if (frontmatter?.annotation_id === annotationId) return candidate;
@@ -2471,6 +2624,10 @@ export default class SideNote extends Plugin {
     async loadPluginData() {
         const rawData: any = Object.assign({}, { imageHashes: {} }, DEFAULT_SETTINGS, await this.loadData());
         this.settings = { ...DEFAULT_SETTINGS, ...rawData };
+        this.settings.annotationPathStrategy = rawData.annotationPathStrategy === "mirror_source_tree"
+            ? "mirror_source_tree"
+            : DEFAULT_SETTINGS.annotationPathStrategy;
+        this.settings.annotationCategoryMappings = this.sanitizeAnnotationCategoryMappings(rawData.annotationCategoryMappings);
         this.imageHashes = rawData.imageHashes || {};
 
         // Load comments from per-file storage
@@ -2712,13 +2869,7 @@ export default class SideNote extends Plugin {
                 divider.className = 'sidenote-toolbar-divider';
                 this.toolbar.appendChild(divider);
 
-                const presetColors = [
-                    { name: 'Purple', value: '#8b5cf6' },
-                    { name: 'Pink', value: '#ec4899' },
-                    { name: 'Blue', value: '#3b82f6' },
-                    { name: 'Green', value: '#10b981' },
-                    { name: 'Yellow', value: '#f59e0b' }
-                ];
+                const presetColors = plugin.getPresetAnnotationColors();
 
                 const colorPicker = document.createElement('input');
                 colorPicker.type = 'color';

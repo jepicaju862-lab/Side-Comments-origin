@@ -1,7 +1,9 @@
-import { ItemView, WorkspaceLeaf, TFile, App, MarkdownView, Notice, ViewStateResult, Plugin, Setting, PluginSettingTab, MarkdownRenderer, setIcon, Component, normalizePath, Platform, Editor, Modal } from "obsidian";
+import { ItemView, WorkspaceLeaf, TFile, App, MarkdownView, Notice, ViewStateResult, Plugin, Setting, PluginSettingTab, MarkdownRenderer, setIcon, Component, normalizePath, Platform, Editor, Modal, stringifyYaml } from "obsidian";
 import { Comment, CommentManager } from "./commentManager";
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate, hoverTooltip } from "@codemirror/view";
 import { RangeSetBuilder, StateEffect } from "@codemirror/state";
+
+declare const module: any;
 
 // --- Helper Functions ---
 
@@ -46,6 +48,13 @@ interface CustomViewState extends Record<string, unknown> {
     filePath: string | null;
 }
 
+type AnnotationPathStrategy = "group_by_source_key" | "mirror_source_tree";
+
+interface AnnotationCategoryMapping {
+    category: string;
+    color: string;
+}
+
 interface SideNoteSettings {
     commentSortOrder: "timestamp" | "position";
     showHighlights: boolean;
@@ -55,6 +64,9 @@ interface SideNoteSettings {
     highlightOpacity: number;
     enableSelectionToolbar: boolean;
     commentsDataFolder: string;
+    annotationOutputFolder: string;
+    annotationPathStrategy: AnnotationPathStrategy;
+    annotationCategoryMappings: AnnotationCategoryMapping[];
 }
 
 interface PluginData extends SideNoteSettings {
@@ -74,6 +86,19 @@ interface TableBlock {
     endLine: number;
 }
 
+type AnnotationSyncBlockedReason = "conflict" | "parse_error";
+type AnnotationUpsertResult =
+    | { status: "created" | "updated" | "noop" }
+    | { status: "blocked"; reason: AnnotationSyncBlockedReason; detail?: string };
+
+const DEFAULT_ANNOTATION_CATEGORY_MAPPINGS: AnnotationCategoryMapping[] = [
+    { category: "不足和展望", color: "#8b5cf6" },
+    { category: "结论、创新与优点", color: "#ec4899" },
+    { category: "结果", color: "#3b82f6" },
+    { category: "方法、技术及参数", color: "#10b981" },
+    { category: "背景和问题", color: "#f59e0b" },
+];
+
 const DEFAULT_SETTINGS: SideNoteSettings = {
     commentSortOrder: "position",
     showHighlights: true,
@@ -83,6 +108,29 @@ const DEFAULT_SETTINGS: SideNoteSettings = {
     highlightOpacity: 0.2,
     enableSelectionToolbar: true,
     commentsDataFolder: "side-note-data",
+    annotationOutputFolder: "20_Notes/Annotations",
+    annotationPathStrategy: "group_by_source_key",
+    annotationCategoryMappings: DEFAULT_ANNOTATION_CATEGORY_MAPPINGS,
+};
+
+const DEFAULT_SOURCE_TYPE = "other";
+const FALLBACK_CATEGORY = "待分类";
+const CONTROLLED_BLOCK_START = "<!-- side-comments-sync:start -->";
+const CONTROLLED_BLOCK_END = "<!-- side-comments-sync:end -->";
+const BACKLINK_SECTION_HEADING = "## Side Comments 回链";
+
+const COLOR_CATEGORY_MAP: Record<string, string> = {
+    "#f59e0b": "背景和问题",
+    "#ffc800": "背景和问题",
+    "#ffd166": "背景和问题",
+    "#10b981": "方法、技术及参数",
+    "#06d6a0": "方法、技术及参数",
+    "#3b82f6": "结果",
+    "#118ab2": "结果",
+    "#ec4899": "结论、创新与优点",
+    "#ef476f": "结论、创新与优点",
+    "#8b5cf6": "不足和展望",
+    "#8d99ae": "不足和展望",
 };
 
 const SHORTCUT_COMMANDS = [
@@ -180,6 +228,17 @@ class SideNoteView extends ItemView {
         exportBtn.setAttribute("aria-label", "Export to Markdown");
         setIcon(exportBtn, "file-up");
         exportBtn.onclick = async () => { await this.exportCommentsToMarkdown(); };
+
+        const syncBtn = toolbar.createEl("button", { cls: "clickable-icon" });
+        syncBtn.setAttribute("aria-label", "Sync current file comments and annotations");
+        setIcon(syncBtn, "refresh-cw");
+        syncBtn.onclick = async () => {
+            if (!this.file) {
+                new Notice("No file selected.");
+                return;
+            }
+            await this.plugin.syncCurrentFileCommentsAndAnnotations(this.file);
+        };
 
         const sortBtn = toolbar.createEl("button", { cls: "clickable-icon" });
         sortBtn.setAttribute("aria-label", this.plugin.settings.commentSortOrder === "position" ? "Sort by Time" : "Sort by Position");
@@ -338,6 +397,13 @@ class SideNoteView extends ItemView {
                     e.stopPropagation();
                     menuContainer.classList.remove("visible");
                     this.plugin.copyBacklink(comment);
+                };
+
+                const openAnnotationOption = menuContainer.createEl("button", { text: "打开 Annotation", cls: "sidenote-menu-option" });
+                openAnnotationOption.onclick = async (e) => {
+                    e.stopPropagation();
+                    menuContainer.classList.remove("visible");
+                    await this.plugin.openAnnotationNoteForComment(comment);
                 };
 
                 const searchOption = menuContainer.createEl("button", { text: "在库中搜索", cls: "sidenote-menu-option" });
@@ -530,13 +596,7 @@ class CommentModal extends Modal {
         
         // Colors
         const colorsWrapper = footer.createDiv("sidenote-edit-modal-colors");
-        const presetColors = [
-            { name: 'Purple', value: '#8b5cf6' },
-            { name: 'Pink', value: '#ec4899' },
-            { name: 'Blue', value: '#3b82f6' },
-            { name: 'Green', value: '#10b981' },
-            { name: 'Yellow', value: '#f59e0b' }
-        ];
+        const presetColors = this.plugin.getPresetAnnotationColors();
 
         let activeCircle: HTMLElement | null = null;
         const updateActiveCircle = (circle: HTMLElement | null) => {
@@ -714,6 +774,70 @@ class SideNoteSettingTab extends PluginSettingTab {
     plugin: SideNote;
     constructor(app: App, plugin: SideNote) { super(app, plugin); }
 
+    private async updateAnnotationCategoryMapping(index: number, patch: Partial<AnnotationCategoryMapping>): Promise<void> {
+        const next = this.plugin.getAnnotationCategoryMappings();
+        next[index] = {
+            ...next[index],
+            ...patch,
+        };
+        this.plugin.settings.annotationCategoryMappings = next;
+        await this.plugin.saveData();
+    }
+
+    private async removeAnnotationCategoryMapping(index: number): Promise<void> {
+        const next = this.plugin.getAnnotationCategoryMappings();
+        if (next.length <= 1) {
+            new Notice("至少保留一条分类映射。");
+            return;
+        }
+        next.splice(index, 1);
+        this.plugin.settings.annotationCategoryMappings = next;
+        await this.plugin.saveData();
+        this.display();
+    }
+
+    private renderAnnotationCategoryMappings(containerEl: HTMLElement): void {
+        const mappings = this.plugin.getAnnotationCategoryMappings();
+        mappings.forEach((mapping, index) => {
+            new Setting(containerEl)
+                .setName(`映射 ${index + 1}`)
+                .setDesc(index === 0 ? "颜色与 category_major 的对应关系；设置顺序同时作为默认调色板顺序。" : "")
+                .addColorPicker((colorPicker) =>
+                    colorPicker.setValue(mapping.color).onChange(async (value: string) => {
+                        await this.updateAnnotationCategoryMapping(index, { color: value.toLowerCase() });
+                    }))
+                .addText((text) =>
+                    text.setPlaceholder(FALLBACK_CATEGORY).setValue(mapping.category).onChange(async (value) => {
+                        await this.updateAnnotationCategoryMapping(index, { category: value.trim() || FALLBACK_CATEGORY });
+                    }))
+                .addButton((button) =>
+                    button.setButtonText("删除").onClick(async () => {
+                        await this.removeAnnotationCategoryMapping(index);
+                    }));
+        });
+
+        new Setting(containerEl)
+            .setName("分类映射操作")
+            .setDesc("新增或重置默认分类颜色组。")
+            .addButton((button) =>
+                button.setButtonText("新增映射").onClick(async () => {
+                    const next = this.plugin.getAnnotationCategoryMappings();
+                    next.push({
+                        category: `分类 ${next.length + 1}`,
+                        color: "#999999",
+                    });
+                    this.plugin.settings.annotationCategoryMappings = next;
+                    await this.plugin.saveData();
+                    this.display();
+                }))
+            .addButton((button) =>
+                button.setButtonText("恢复默认").onClick(async () => {
+                    this.plugin.settings.annotationCategoryMappings = this.plugin.getDefaultAnnotationCategoryMappings();
+                    await this.plugin.saveData();
+                    this.display();
+                }));
+    }
+
     display(): void {
         const { containerEl } = this;
         containerEl.empty();
@@ -775,10 +899,40 @@ class SideNoteSettingTab extends PluginSettingTab {
                     this.plugin.settings.commentsDataFolder = value.trim() || "side-note-data";
                     await this.plugin.saveData();
                 }));
+        containerEl.createEl("h3", { text: "Annotation Sync 设置" });
+        containerEl.createEl("p", {
+            text: "自定义 annotation note 的输出目录、路径规则，以及分类颜色映射。",
+            cls: "setting-item-description"
+        });
+        new Setting(containerEl).setName("Annotation output folder").setDesc("Vault folder for annotation notes generated from Side Comments.").addText((text) =>
+                text.setPlaceholder("20_Notes/Annotations").setValue(this.plugin.settings.annotationOutputFolder || "").onChange(async (value) => {
+                    this.plugin.settings.annotationOutputFolder = value.trim() || DEFAULT_SETTINGS.annotationOutputFolder;
+                    await this.plugin.saveData();
+                }));
+        new Setting(containerEl).setName("Annotation path strategy").setDesc("Choose whether generated annotation notes only group by source key, or also mirror the source note folder tree.")
+            .addDropdown((dropdown) =>
+                dropdown
+                    .addOption("group_by_source_key", "Group by source key (default)")
+                    .addOption("mirror_source_tree", "Mirror source folder tree")
+                    .setValue(this.plugin.getAnnotationPathStrategy())
+                    .onChange(async (value: AnnotationPathStrategy) => {
+                        this.plugin.settings.annotationPathStrategy = value;
+                        await this.plugin.saveData();
+                    }));
+        this.renderAnnotationCategoryMappings(containerEl);
         new Setting(containerEl).setName("Create Markdown Backup").addButton((button) =>
                 button.setButtonText("Create Backup").onClick(async () => {
                     await this.plugin.migrateInlineCommentsToMarkdown();
                     new Notice("Markdown backup created successfully!");
+                }));
+        new Setting(containerEl).setName("Sync current file comments and annotations").addButton((button) =>
+                button.setButtonText("Sync Now").onClick(async () => {
+                    const activeFile = this.app.workspace.getActiveFile();
+                    if (!(activeFile instanceof TFile) || activeFile.extension !== "md") {
+                        new Notice("No active Markdown file found.");
+                        return;
+                    }
+                    await this.plugin.syncCurrentFileCommentsAndAnnotations(activeFile);
                 }));
         const orphanedCount = this.plugin.commentManager.getOrphanedCommentCount();
         new Setting(containerEl).setName("Orphaned comments").setDesc(`There are ${orphanedCount} orphaned comment(s).`);
@@ -1418,6 +1572,676 @@ export default class SideNote extends Plugin {
         if (changed) await this.saveData();
     }
 
+    private normalizeCommentForHash(commentText: string): string {
+        return commentText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    }
+
+    private async generateCommentHash(commentText: string): Promise<string> {
+        return generateHash(this.normalizeCommentForHash(commentText));
+    }
+
+    private async areCommentsSemanticallyEqual(left: string, right: string): Promise<boolean> {
+        return (await this.generateCommentHash(left)) === (await this.generateCommentHash(right));
+    }
+
+    private getLocalDateString(date: Date): string {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        const day = String(date.getDate()).padStart(2, "0");
+        return `${year}-${month}-${day}`;
+    }
+
+    private getLocalIsoString(date: Date): string {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        const day = String(date.getDate()).padStart(2, "0");
+        const hours = String(date.getHours()).padStart(2, "0");
+        const minutes = String(date.getMinutes()).padStart(2, "0");
+        const seconds = String(date.getSeconds()).padStart(2, "0");
+        const offsetMinutes = -date.getTimezoneOffset();
+        const sign = offsetMinutes >= 0 ? "+" : "-";
+        const offsetHours = String(Math.floor(Math.abs(offsetMinutes) / 60)).padStart(2, "0");
+        const offsetRemainder = String(Math.abs(offsetMinutes) % 60).padStart(2, "0");
+        return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${sign}${offsetHours}:${offsetRemainder}`;
+    }
+
+    private escapeRegExp(text: string): string {
+        return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    private async ensureFolderPath(folderPath: string): Promise<void> {
+        const normalized = normalizePath(folderPath);
+        if (normalized === "." || normalized === "") return;
+        if (await this.app.vault.adapter.exists(normalized)) return;
+
+        const segments = normalized.split("/").filter(Boolean);
+        let current = "";
+        for (const segment of segments) {
+            current = current ? `${current}/${segment}` : segment;
+            if (!(await this.app.vault.adapter.exists(current))) {
+                await this.app.vault.createFolder(current);
+            }
+        }
+    }
+
+    private normalizeHexColor(value: unknown, fallback: string): string {
+        if (typeof value !== "string") return fallback;
+        const normalized = value.trim().toLowerCase();
+        return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : fallback;
+    }
+
+    public getDefaultAnnotationCategoryMappings(): AnnotationCategoryMapping[] {
+        return DEFAULT_ANNOTATION_CATEGORY_MAPPINGS.map((mapping) => ({ ...mapping }));
+    }
+
+    private sanitizeAnnotationCategoryMappings(rawMappings: unknown): AnnotationCategoryMapping[] {
+        const defaults = this.getDefaultAnnotationCategoryMappings();
+        if (!Array.isArray(rawMappings) || rawMappings.length === 0) {
+            return defaults;
+        }
+        return rawMappings.map((rawMapping, index) => {
+            const fallback = defaults[Math.min(index, defaults.length - 1)] || defaults[0];
+            const candidate = (rawMapping && typeof rawMapping === "object") ? rawMapping as Record<string, unknown> : {};
+            const category = typeof candidate.category === "string" && candidate.category.trim().length > 0
+                ? candidate.category.trim()
+                : fallback.category;
+            const color = this.normalizeHexColor(candidate.color, fallback.color);
+            return { category, color };
+        });
+    }
+
+    public getAnnotationCategoryMappings(): AnnotationCategoryMapping[] {
+        return this.sanitizeAnnotationCategoryMappings(this.settings.annotationCategoryMappings);
+    }
+
+    public getPresetAnnotationColors(): Array<{ name: string; value: string }> {
+        return this.getAnnotationCategoryMappings().map((mapping) => ({
+            name: mapping.category,
+            value: mapping.color,
+        }));
+    }
+
+    public getAnnotationPathStrategy(): AnnotationPathStrategy {
+        return this.settings.annotationPathStrategy === "mirror_source_tree"
+            ? "mirror_source_tree"
+            : "group_by_source_key";
+    }
+
+    private getAnnotationOutputRoot(): string {
+        return normalizePath(this.settings.annotationOutputFolder?.trim() || DEFAULT_SETTINGS.annotationOutputFolder);
+    }
+
+    private getSourceRelativeParentPath(file: TFile): string {
+        const parentPath = file.parent?.path;
+        if (!parentPath || parentPath === "/") return "";
+        return normalizePath(parentPath);
+    }
+
+    private getCategoryForColor(color?: string): string {
+        if (!color) return FALLBACK_CATEGORY;
+        const normalizedColor = color.toLowerCase();
+        const configured = this.getAnnotationCategoryMappings().find((mapping) => mapping.color.toLowerCase() === normalizedColor);
+        if (configured) return configured.category;
+        return COLOR_CATEGORY_MAP[normalizedColor] || FALLBACK_CATEGORY;
+    }
+
+    private getSourceKey(file: TFile): string {
+        return file.basename;
+    }
+
+    private getAnnotationFolderPath(file: TFile): string {
+        const root = this.getAnnotationOutputRoot();
+        const sourceKey = this.getSourceKey(file);
+        if (this.getAnnotationPathStrategy() === "mirror_source_tree") {
+            const relativeParent = this.getSourceRelativeParentPath(file);
+            return relativeParent ? `${root}/${relativeParent}/${sourceKey}` : `${root}/${sourceKey}`;
+        }
+        return `${root}/${sourceKey}`;
+    }
+
+    private getExpectedAnnotationPath(file: TFile, timestamp: number): string {
+        const sourceKey = this.getSourceKey(file);
+        return `${this.getAnnotationFolderPath(file)}/${sourceKey}_ann_${timestamp}.md`;
+    }
+
+    private getManagedAnnotationMetadata(file: TFile): {
+        annotationId: string;
+        timestamp: number;
+        commentHashAtSync: string;
+    } | null {
+        const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, any> | undefined;
+        const annotationId = typeof frontmatter?.annotation_id === "string" ? frontmatter.annotation_id : "";
+        const sideComments = (frontmatter?.side_comments || {}) as Record<string, any>;
+        const timestamp = typeof sideComments.timestamp === "number"
+            ? sideComments.timestamp
+            : Number(sideComments.timestamp);
+        if (frontmatter?.type !== "annotation") return null;
+        if (!annotationId.startsWith("side-comments:")) return null;
+        if (!Number.isInteger(timestamp)) return null;
+        return {
+            annotationId,
+            timestamp,
+            commentHashAtSync: typeof sideComments.comment_hash_at_sync === "string" ? sideComments.comment_hash_at_sync : "",
+        };
+    }
+
+    private buildBacklinkCallout(comment: Comment): string {
+        const quoteText = (text: string, prefix: string) => {
+            return text.split("\n").map((line) => prefix + line).join("\n");
+        };
+        const link = `[点击跳转至原文位置](obsidian://sidenote?timestamp=${comment.timestamp})`;
+        return `${CONTROLLED_BLOCK_START}\n` +
+            `> [!quote] 批注回链 - ${link}\n` +
+            `> **原文**：\n` +
+            `${quoteText(comment.selectedText || "", "> > ")}\n` +
+            `> \n` +
+            `> **批注**：\n` +
+            `${quoteText(comment.comment || "（无）", "> ")}\n` +
+            `${CONTROLLED_BLOCK_END}`;
+    }
+
+    private buildBacklinkSection(comment: Comment): string {
+        return `${BACKLINK_SECTION_HEADING}\n\n${this.buildBacklinkCallout(comment)}`;
+    }
+
+    private buildNewAnnotationBody(comment: Comment): string {
+        return `${this.buildBacklinkSection(comment)}\n\n## 解释与扩展\n\n## 关联\n\n## 后续动作\n`;
+    }
+
+    private findMarkerPositions(content: string, marker: string): number[] {
+        const positions: number[] = [];
+        let searchIndex = 0;
+        while (searchIndex < content.length) {
+            const foundIndex = content.indexOf(marker, searchIndex);
+            if (foundIndex === -1) {
+                break;
+            }
+            positions.push(foundIndex);
+            searchIndex = foundIndex + marker.length;
+        }
+        return positions;
+    }
+
+    private getControlledBacklinkBlockBounds(content: string): { startIndex: number; endIndex: number } {
+        const startPositions = this.findMarkerPositions(content, CONTROLLED_BLOCK_START);
+        const endPositions = this.findMarkerPositions(content, CONTROLLED_BLOCK_END);
+        if (startPositions.length === 0 && endPositions.length === 0) {
+            throw new Error("Controlled backlink block not found.");
+        }
+        if (startPositions.length !== 1 || endPositions.length !== 1) {
+            throw new Error("Controlled backlink block markers must each appear exactly once.");
+        }
+
+        const startIndex = startPositions[0];
+        const endIndex = endPositions[0];
+        if (endIndex <= startIndex) {
+            throw new Error("Controlled backlink block markers are malformed.");
+        }
+
+        return { startIndex, endIndex };
+    }
+
+    private replaceBacklinkSection(content: string, comment: Comment): string {
+        this.getControlledBacklinkBlockBounds(content);
+
+        const section = this.buildBacklinkSection(comment);
+        const headingRegex = new RegExp(`^${this.escapeRegExp(BACKLINK_SECTION_HEADING)}\\s*$\\r?\\n?`, "gm");
+        const controlledBlockRegex = new RegExp(
+            `${this.escapeRegExp(CONTROLLED_BLOCK_START)}[\\s\\S]*?${this.escapeRegExp(CONTROLLED_BLOCK_END)}\\s*`,
+            "g"
+        );
+        const stripManagedSection = (text: string) => {
+            return text
+                .replace(controlledBlockRegex, "")
+                .replace(headingRegex, "")
+                .trimStart();
+        };
+
+        const frontmatterMatch = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+        if (frontmatterMatch) {
+            const body = stripManagedSection(content.slice(frontmatterMatch[0].length));
+            return `${frontmatterMatch[0]}${section}\n\n${body}`;
+        }
+
+        return `${section}\n\n${stripManagedSection(content)}`;
+    }
+
+    private isCommentHeadingLine(line: string): boolean {
+        return /^>\s*\*\*\u6279\u6ce8\*\*[\uFF1A:]\s*$/u.test(line.trim());
+    }
+
+    private isEmptyCommentPlaceholder(commentText: string): boolean {
+        return /^[\uFF08(]\s*\u65e0\s*[\uFF09)]$/u.test(commentText.trim());
+    }
+
+    private parseAnnotationBacklinkComment(content: string): string {
+        const { startIndex, endIndex } = this.getControlledBacklinkBlockBounds(content);
+
+        const block = content.slice(startIndex + CONTROLLED_BLOCK_START.length, endIndex);
+        const lines = block.split(/\r?\n/);
+        const commentHeadingIndices = lines
+            .map((line, index) => this.isCommentHeadingLine(line) ? index : -1)
+            .filter((index) => index >= 0);
+        if (commentHeadingIndices.length !== 1) {
+            throw new Error("Controlled comment heading must appear exactly once.");
+        }
+        const commentHeadingIndex = commentHeadingIndices[0];
+
+        const commentLines = lines.slice(commentHeadingIndex + 1).map((line) => {
+            if (line === ">") return "";
+            if (line.startsWith("> ")) return line.slice(2);
+            if (line.startsWith(">")) return line.slice(1);
+            return line;
+        });
+        while (commentLines.length > 0 && commentLines[commentLines.length - 1] === "") {
+            commentLines.pop();
+        }
+        const commentText = commentLines.join("\n");
+        return this.isEmptyCommentPlaceholder(commentText) ? "" : commentText;
+    }
+
+    private async evaluateAnnotationCommentSyncState(
+        currentContent: string,
+        existingFrontmatter: Record<string, any> | undefined,
+        jsonCommentText: string
+    ): Promise<{
+        storedHash: string;
+        noteCommentText: string;
+        noteCommentHash: string;
+        jsonCommentHash: string;
+        noteChangedSinceSync: boolean;
+        jsonChangedSinceSync: boolean;
+        conflict: boolean;
+    }> {
+        const noteCommentText = this.parseAnnotationBacklinkComment(currentContent);
+        const noteCommentHash = await this.generateCommentHash(noteCommentText);
+        const jsonCommentHash = await this.generateCommentHash(jsonCommentText);
+        const storedHash = typeof existingFrontmatter?.side_comments?.comment_hash_at_sync === "string"
+            ? existingFrontmatter.side_comments.comment_hash_at_sync
+            : "";
+        const noteChangedSinceSync = !!storedHash && noteCommentHash !== storedHash;
+        const jsonChangedSinceSync = !!storedHash && jsonCommentHash !== storedHash;
+        const conflict = !!storedHash
+            && noteChangedSinceSync
+            && jsonChangedSinceSync
+            && noteCommentHash !== jsonCommentHash;
+        return {
+            storedHash,
+            noteCommentText,
+            noteCommentHash,
+            jsonCommentHash,
+            noteChangedSinceSync,
+            jsonChangedSinceSync,
+            conflict,
+        };
+    }
+
+    private async findExistingAnnotationFile(annotationId: string, expectedPath: string): Promise<TFile | null> {
+        const expected = this.app.vault.getAbstractFileByPath(expectedPath);
+        if (expected instanceof TFile) return expected;
+
+        const candidates = this.app.vault.getMarkdownFiles();
+        for (const candidate of candidates) {
+            const frontmatter = this.app.metadataCache.getFileCache(candidate)?.frontmatter;
+            if (frontmatter?.annotation_id === annotationId) return candidate;
+        }
+        return null;
+    }
+
+    private async findAnnotationFileForComment(comment: Comment): Promise<TFile | null> {
+        const annotationId = `side-comments:${comment.timestamp}`;
+        const sourceFile = this.app.vault.getAbstractFileByPath(comment.filePath);
+        const expectedPath = sourceFile instanceof TFile
+            ? this.getExpectedAnnotationPath(sourceFile, comment.timestamp)
+            : "";
+        return this.findExistingAnnotationFile(annotationId, expectedPath);
+    }
+
+    async openAnnotationNoteForComment(comment: Comment): Promise<void> {
+        const annotationFile = await this.findAnnotationFileForComment(comment);
+        if (!annotationFile) {
+            new Notice("还没有 annotation，请同步生成。");
+            return;
+        }
+        await this.app.workspace.getLeaf(true).openFile(annotationFile);
+    }
+
+    private getComparableManagedFrontmatter(frontmatter?: Record<string, any>): Record<string, any> {
+        const locator = (frontmatter?.locator || {}) as Record<string, any>;
+        const sideComments = (frontmatter?.side_comments || {}) as Record<string, any>;
+        const comparable: Record<string, any> = {
+            type: frontmatter?.type,
+            status: frontmatter?.status,
+            annotation_status: frontmatter?.annotation_status,
+            source: frontmatter?.source,
+            source_key: frontmatter?.source_key,
+            source_type: frontmatter?.source_type,
+            category_major: frontmatter?.category_major,
+            category_minor: frontmatter?.category_minor,
+            stage: frontmatter?.stage,
+            targets: Array.isArray(frontmatter?.targets) ? frontmatter.targets : [],
+            locator: {
+                filePath: locator.filePath,
+                headingPath: Array.isArray(locator.headingPath) ? locator.headingPath : [],
+                startLine: locator.startLine,
+                startChar: locator.startChar,
+                endLine: locator.endLine,
+                endChar: locator.endChar,
+            },
+            quote_hash: frontmatter?.quote_hash,
+            annotation_id: frontmatter?.annotation_id,
+            side_comments: {
+                timestamp: sideComments.timestamp,
+                source_json: sideComments.source_json,
+                occurrenceIndex: sideComments.occurrenceIndex,
+                markType: sideComments.markType,
+                color: sideComments.color,
+                isOrphaned: Boolean(sideComments.isOrphaned),
+                comment_hash_at_sync: sideComments.comment_hash_at_sync,
+            },
+            created: frontmatter?.created,
+        };
+        if (frontmatter && Object.prototype.hasOwnProperty.call(frontmatter, "page") && frontmatter.page != null) {
+            comparable.page = frontmatter.page;
+        }
+        return comparable;
+    }
+
+    private hasManagedFrontmatterChange(existingFrontmatter: Record<string, any> | undefined, nextFrontmatter: Record<string, any>): boolean {
+        return this.needsManagedFrontmatterCleanup(existingFrontmatter)
+            || JSON.stringify(this.getComparableManagedFrontmatter(existingFrontmatter)) !== JSON.stringify(this.getComparableManagedFrontmatter(nextFrontmatter));
+    }
+
+    private needsManagedFrontmatterCleanup(frontmatter?: Record<string, any>): boolean {
+        if (!frontmatter) return false;
+        if (Object.prototype.hasOwnProperty.call(frontmatter, "page") && frontmatter.page == null) {
+            return true;
+        }
+        const sideComments = (frontmatter.side_comments || {}) as Record<string, any>;
+        return Object.prototype.hasOwnProperty.call(sideComments, "filePath")
+            || Object.prototype.hasOwnProperty.call(sideComments, "selectedTextHash");
+    }
+
+    private async buildManagedAnnotationFrontmatter(
+        file: TFile,
+        comment: Comment,
+        existingFrontmatter?: Record<string, any>,
+        options?: { refreshSyncMetadata?: boolean }
+    ): Promise<Record<string, any>> {
+        const now = new Date();
+        const commentCreatedAt = new Date(comment.timestamp);
+        const sourceKey = this.getSourceKey(file);
+        const mappedCategory = this.getCategoryForColor(comment.color);
+        const existingCategory = existingFrontmatter?.category_major;
+        const preserveManualCategory = typeof existingCategory === "string" && existingCategory.length > 0 && existingCategory !== FALLBACK_CATEGORY;
+        const annotationStatus = comment.isOrphaned ? "orphaned" : (mappedCategory === FALLBACK_CATEGORY ? "needs_review" : "active");
+        const noteStatus = comment.isOrphaned ? "review" : "active";
+        const selectedTextHash = comment.selectedTextHash || await generateHash(comment.selectedText || "");
+        const commentHash = await this.generateCommentHash(comment.comment || "");
+        const refreshSyncMetadata = options?.refreshSyncMetadata ?? true;
+        const frontmatter: Record<string, any> = {
+            type: "annotation",
+            status: noteStatus,
+            annotation_status: annotationStatus,
+            source: existingFrontmatter?.source || `[[${sourceKey}]]`,
+            source_key: sourceKey,
+            source_type: existingFrontmatter?.source_type || DEFAULT_SOURCE_TYPE,
+            category_major: preserveManualCategory ? existingCategory : mappedCategory,
+            category_minor: existingFrontmatter?.category_minor ?? "",
+            stage: existingFrontmatter?.stage || "captured",
+            targets: Array.isArray(existingFrontmatter?.targets) ? existingFrontmatter.targets : [],
+            locator: {
+                filePath: comment.filePath,
+                headingPath: comment.headingPath || [],
+                startLine: comment.startLine,
+                startChar: comment.startChar,
+                endLine: comment.endLine,
+                endChar: comment.endChar,
+            },
+            quote_hash: selectedTextHash,
+            annotation_id: `side-comments:${comment.timestamp}`,
+            side_comments: {
+                timestamp: comment.timestamp,
+                source_json: this.getCommentsJsonPath(comment.filePath),
+                occurrenceIndex: typeof comment.occurrenceIndex === "number" ? comment.occurrenceIndex : 0,
+                markType: comment.markType || "highlight",
+                color: comment.color || "",
+                isOrphaned: Boolean(comment.isOrphaned),
+                comment_hash_at_sync: commentHash,
+            },
+            created: this.getLocalDateString(commentCreatedAt),
+        };
+        if (existingFrontmatter && Object.prototype.hasOwnProperty.call(existingFrontmatter, "page") && existingFrontmatter.page != null) {
+            frontmatter.page = existingFrontmatter.page;
+        }
+        if (refreshSyncMetadata) {
+            frontmatter.side_comments.synced_at = this.getLocalIsoString(now);
+            frontmatter.updated = this.getLocalDateString(now);
+        } else {
+            frontmatter.side_comments.synced_at = existingFrontmatter?.side_comments?.synced_at || this.getLocalIsoString(now);
+            frontmatter.updated = existingFrontmatter?.updated || this.getLocalDateString(now);
+        }
+        return frontmatter;
+    }
+
+    private buildAnnotationNoteContent(frontmatter: Record<string, any>, comment: Comment): string {
+        return `---\n${stringifyYaml(frontmatter)}---\n\n${this.buildNewAnnotationBody(comment)}`;
+    }
+
+    private buildAnnotationSyncSummaryMessage(
+        created: number,
+        updated: number,
+        unchanged: number,
+        blockedByReason: Record<AnnotationSyncBlockedReason, number>
+    ): string {
+        const blocked = blockedByReason.conflict + blockedByReason.parse_error;
+        const blockedSuffix = blocked > 0
+            ? ` (conflict: ${blockedByReason.conflict}, parse_error: ${blockedByReason.parse_error})`
+            : "";
+        return `Annotation sync complete: ${created} created, ${updated} updated, ${unchanged} unchanged, ${blocked} blocked${blockedSuffix}.`;
+    }
+
+    private async upsertAnnotationNoteForComment(file: TFile, comment: Comment): Promise<AnnotationUpsertResult> {
+        const annotationId = `side-comments:${comment.timestamp}`;
+        const expectedPath = this.getExpectedAnnotationPath(file, comment.timestamp);
+        const existingFile = await this.findExistingAnnotationFile(annotationId, expectedPath);
+
+        if (!existingFile) {
+            await this.ensureFolderPath(this.getAnnotationFolderPath(file));
+            const frontmatter = await this.buildManagedAnnotationFrontmatter(file, comment);
+            const content = this.buildAnnotationNoteContent(frontmatter, comment);
+            await this.app.vault.create(expectedPath, content);
+            return { status: "created" };
+        }
+
+        const currentContent = await this.app.vault.read(existingFile);
+        const existingFrontmatter = (this.app.metadataCache.getFileCache(existingFile)?.frontmatter || {}) as Record<string, any>;
+        let contentDraft: string;
+        try {
+            const syncState = await this.evaluateAnnotationCommentSyncState(currentContent, existingFrontmatter, comment.comment || "");
+            if (syncState.conflict) {
+                return {
+                    status: "blocked",
+                    reason: "conflict",
+                };
+            }
+            contentDraft = this.replaceBacklinkSection(currentContent, comment);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown parse error.";
+            return {
+                status: "blocked",
+                reason: "parse_error",
+                detail: message,
+            };
+        }
+        const draftFrontmatter = await this.buildManagedAnnotationFrontmatter(file, comment, existingFrontmatter, { refreshSyncMetadata: false });
+        const managedChanged = this.hasManagedFrontmatterChange(existingFrontmatter, draftFrontmatter);
+        const contentChanged = contentDraft !== currentContent;
+
+        if (!managedChanged && !contentChanged) {
+            return { status: "noop" };
+        }
+
+        if (contentChanged && !managedChanged) {
+            await this.app.vault.modify(existingFile, contentDraft);
+            return { status: "updated" };
+        }
+
+        const next = await this.buildManagedAnnotationFrontmatter(file, comment, existingFrontmatter, { refreshSyncMetadata: true });
+        const managedKeys = new Set([
+            "type",
+            "status",
+            "annotation_status",
+            "source",
+            "source_key",
+            "source_type",
+            "category_major",
+            "category_minor",
+            "stage",
+            "targets",
+            "page",
+            "locator",
+            "quote_hash",
+            "annotation_id",
+            "side_comments",
+            "created",
+            "updated",
+        ]);
+        await this.app.fileManager.processFrontMatter(existingFile, (frontmatter) => {
+            for (const key of managedKeys) {
+                if (Object.prototype.hasOwnProperty.call(next, key)) {
+                    frontmatter[key] = next[key];
+                } else {
+                    delete frontmatter[key];
+                }
+            }
+        });
+
+        if (contentChanged) {
+            const refreshedContent = await this.app.vault.read(existingFile);
+            const updatedContent = this.replaceBacklinkSection(refreshedContent, comment);
+            await this.app.vault.modify(existingFile, updatedContent);
+        }
+        return { status: "updated" };
+    }
+
+    async syncCommentsToAnnotationsForFile(file: TFile): Promise<void> {
+        if (!(file instanceof TFile) || file.extension !== "md") {
+            new Notice("No active Markdown file found.");
+            return;
+        }
+
+        await this.reloadCommentsFromDisk();
+        const commentsForFile = this.commentManager.getCommentsForFile(file.path);
+        if (commentsForFile.length === 0) {
+            new Notice("No comments for this file yet.");
+            return;
+        }
+
+        let created = 0;
+        let updated = 0;
+        let unchanged = 0;
+        const blockedByReason: Record<AnnotationSyncBlockedReason, number> = {
+            conflict: 0,
+            parse_error: 0,
+        };
+        for (const comment of commentsForFile) {
+            if (!comment.selectedTextHash && comment.selectedText) {
+                comment.selectedTextHash = await generateHash(comment.selectedText);
+            }
+            const result = await this.upsertAnnotationNoteForComment(file, comment);
+            if (result.status === "created") created++;
+            else if (result.status === "updated") updated++;
+            else if (result.status === "blocked") {
+                blockedByReason[result.reason]++;
+                if (result.detail) {
+                    console.warn("Annotation sync blocked detail:", {
+                        timestamp: comment.timestamp,
+                        reason: result.reason,
+                        detail: result.detail,
+                    });
+                }
+            } else unchanged++;
+        }
+
+        new Notice(this.buildAnnotationSyncSummaryMessage(created, updated, unchanged, blockedByReason));
+    }
+
+    async syncAnnotationNoteToCommentJson(file: TFile): Promise<void> {
+        if (!(file instanceof TFile) || file.extension !== "md") {
+            new Notice("No active Markdown file found.");
+            return;
+        }
+
+        const metadata = this.getManagedAnnotationMetadata(file);
+        if (!metadata) {
+            new Notice("Current file is not a managed Side Comments annotation note.");
+            return;
+        }
+
+        await this.reloadCommentsFromDisk();
+        const content = await this.app.vault.read(file);
+        let nextCommentText = "";
+        try {
+            nextCommentText = this.parseAnnotationBacklinkComment(content);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown parse error.";
+            new Notice(`批注回写已阻止：${message}`);
+            return;
+        }
+
+        const targetComment = this.comments.find((comment) => comment.timestamp === metadata.timestamp);
+        if (!targetComment) {
+            new Notice("批注回写已阻止：未找到对应的 JSON comment。");
+            return;
+        }
+
+        const currentCommentText = targetComment.comment || "";
+        const nextCommentHash = await this.generateCommentHash(nextCommentText);
+        const currentCommentHash = await this.generateCommentHash(currentCommentText);
+        if (nextCommentHash === currentCommentHash) {
+            new Notice("当前 annotation 与 JSON comment 在规范化后内容一致，无需回写。");
+            return;
+        }
+
+        const existingFrontmatter = (this.app.metadataCache.getFileCache(file)?.frontmatter || {}) as Record<string, any>;
+        const syncState = await this.evaluateAnnotationCommentSyncState(content, existingFrontmatter, currentCommentText);
+        if (!syncState.storedHash) {
+            new Notice("批注回写已阻止：缺少 comment_hash_at_sync baseline，无法安全覆盖。");
+            return;
+        }
+        if (syncState.conflict || syncState.jsonChangedSinceSync) {
+            new Notice("批注回写已阻止：JSON comment 自上次同步后已变化，请先重新同步或人工确认。");
+            return;
+        }
+
+        this.commentManager.editComment(metadata.timestamp, nextCommentText);
+        await this.saveCommentsForSingleFile(targetComment.filePath);
+
+        const now = new Date();
+        await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+            const sideComments = ((frontmatter.side_comments || {}) as Record<string, any>);
+            sideComments.comment_hash_at_sync = nextCommentHash;
+            sideComments.synced_at = this.getLocalIsoString(now);
+            frontmatter.side_comments = sideComments;
+            frontmatter.updated = this.getLocalDateString(now);
+        });
+
+        this.refreshViews();
+        this.refreshEditorDecorations();
+        this.scheduleRenderedTableHighlights();
+        new Notice("批注回写完成：JSON comment 已更新。");
+    }
+
+    async syncCurrentFileCommentsAndAnnotations(file: TFile): Promise<void> {
+        const metadata = this.getManagedAnnotationMetadata(file);
+        if (metadata) {
+            await this.syncAnnotationNoteToCommentJson(file);
+            return;
+        }
+        await this.syncCommentsToAnnotationsForFile(file);
+    }
+
     // --- Per-file comment storage ---
 
     private getCommentsJsonPath(notePath: string): string {
@@ -1455,6 +2279,11 @@ export default class SideNote extends Plugin {
             }
         }
         return allComments;
+    }
+
+    private async reloadCommentsFromDisk(): Promise<void> {
+        this.comments = await this.loadAllCommentsFromFiles();
+        this.commentManager.updateComments(this.comments);
     }
 
     async saveAllCommentFiles(): Promise<void> {
@@ -1650,6 +2479,19 @@ export default class SideNote extends Plugin {
 
         this.addCommand({ id: "open-comment-view", name: "在分屏中打开批注视图", callback: () => void switchToSideNoteView(this.app) });
         this.addCommand({ id: "activate-view", name: "在侧边栏打开批注视图", callback: () => this.activateView() });
+        this.addCommand({
+            id: "sync-current-file-comments-to-annotations",
+            name: "同步当前文件批注与 Annotations",
+            icon: "refresh-cw",
+            callback: async () => {
+                const activeFile = this.app.workspace.getActiveFile();
+                if (!(activeFile instanceof TFile) || activeFile.extension !== "md") {
+                    new Notice("No active Markdown file found.");
+                    return;
+                }
+                await this.syncCurrentFileCommentsAndAnnotations(activeFile);
+            }
+        });
         
         this.addCommand({
             id: "add-comment-to-selection", name: "为选中内容添加高亮", icon: "message-square",
@@ -1712,9 +2554,21 @@ export default class SideNote extends Plugin {
         }));
         this.registerEvent(this.app.vault.on('modify', async (file) => {
             if (this.isSaving) return;
-            // Ignore our own comment data files
+            // Reload per-file comment sidecars when they change outside plugin runtime.
             const dataFolder = normalizePath(this.settings.commentsDataFolder?.trim() || DEFAULT_SETTINGS.commentsDataFolder);
-            if (file.path.startsWith(dataFolder + '/')) return;
+            if (file.path.startsWith(dataFolder + '/')) {
+                if (file instanceof TFile && file.extension === 'json') {
+                    try {
+                        await this.reloadCommentsFromDisk();
+                        this.refreshViews();
+                        this.refreshEditorDecorations();
+                        this.scheduleRenderedTableHighlights();
+                    } catch (error) {
+                        console.error("Error reloading comment sidecar data:", error);
+                    }
+                }
+                return;
+            }
 
             if (file.path === '.obsidian/plugins/side-note/data.json' || (file instanceof TFile && file.name === 'data.json' && file.parent?.name === 'side-note')) {
                 try {
@@ -1844,6 +2698,10 @@ export default class SideNote extends Plugin {
     async loadPluginData() {
         const rawData: any = Object.assign({}, { imageHashes: {} }, DEFAULT_SETTINGS, await this.loadData());
         this.settings = { ...DEFAULT_SETTINGS, ...rawData };
+        this.settings.annotationPathStrategy = rawData.annotationPathStrategy === "mirror_source_tree"
+            ? "mirror_source_tree"
+            : DEFAULT_SETTINGS.annotationPathStrategy;
+        this.settings.annotationCategoryMappings = this.sanitizeAnnotationCategoryMappings(rawData.annotationCategoryMappings);
         this.imageHashes = rawData.imageHashes || {};
 
         // Load comments from per-file storage
@@ -2085,13 +2943,7 @@ export default class SideNote extends Plugin {
                 divider.className = 'sidenote-toolbar-divider';
                 this.toolbar.appendChild(divider);
 
-                const presetColors = [
-                    { name: 'Purple', value: '#8b5cf6' },
-                    { name: 'Pink', value: '#ec4899' },
-                    { name: 'Blue', value: '#3b82f6' },
-                    { name: 'Green', value: '#10b981' },
-                    { name: 'Yellow', value: '#f59e0b' }
-                ];
+                const presetColors = plugin.getPresetAnnotationColors();
 
                 const colorPicker = document.createElement('input');
                 colorPicker.type = 'color';

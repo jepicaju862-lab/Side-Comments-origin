@@ -39,6 +39,18 @@
 - 一键导出当前文档所有评论为 Markdown 文件
 - 支持独立 Markdown 文件备份与同步
 
+### 🔄 Annotation 同步
+- 支持手动将当前文件的 comments 同步为可编辑的 annotation notes
+- 生成的 annotation note 内含受控回链块与精确跳转 URI
+- 支持将 annotation note 中受控 comment 正文最小回写到 JSON comment
+- 当 JSON 与 annotation note 自上次同步后都发生变化时，会阻止覆盖而不是静默写坏
+
+### 🗂️ 设置驱动的 Annotation 组织方式
+- 支持自定义 annotation 输出根目录
+- 支持两种路径策略：`group_by_source_key` 与 `mirror_source_tree`
+- 支持自定义分类与颜色映射，用于生成 annotation 元数据
+- comment 弹窗与划词工具栏的默认颜色顺序也复用这套映射
+
 ### 🧹 孤立评论检测
 - 自动检测原文已删除的评论
 - 孤立评论会显示为红色虚线高亮
@@ -64,11 +76,55 @@
 2. 解压插件文件夹至：
 
 ```bash
-<vault>/.obsidian/plugins/side-comments/
-````
+<vault>/.obsidian/plugins/side-comments-origin/
+```
 
 3. 重启 Obsidian
 4. 在 **设置 → 第三方插件** 中启用插件
+
+---
+
+## 🧪 本地开发
+
+仓库现已补齐最小可用的本地构建环境，便于继续二次开发。
+
+### 环境要求
+
+- Node.js 22+
+- npm 10+
+
+### 初始化
+
+1. 安装依赖：
+
+```bash
+npm install
+```
+
+2. 执行类型检查：
+
+```bash
+npm run check
+```
+
+3. 构建插件产物：
+
+```bash
+npm run build
+```
+
+4. 开发时使用监听模式：
+
+```bash
+npm run dev
+```
+
+### 说明
+
+- `src/` 为 TypeScript 源码目录
+- `main.js` 为提交到仓库的构建产物
+- `manifest.json` 仍然是插件版本号的事实来源
+- `npm run version-sync` 可将 `package.json` 版本同步到 `manifest.json`
 
 ---
 
@@ -98,6 +154,21 @@ Open Side Comments View
 * 切换排序方式
 * 编辑或删除评论
 
+### 同步 Comments 与 Annotation Notes
+
+可通过以下入口触发：
+
+* 命令面板：`Sync current file comments and annotations`
+* 侧边栏工具栏同步按钮
+* 设置页中的 `Sync current file comments and annotations` 按钮
+
+当前同步行为：
+
+* `source note -> annotation notes`
+* `annotation note controlled comment -> JSON comment`
+* 不做后台自动同步
+* 出现双向冲突时会阻止覆盖，而不是静默覆盖
+
 ### 插入图片
 
 * 使用 `Ctrl+V` / `Cmd+V` 直接粘贴图片
@@ -121,11 +192,23 @@ Open Side Comments View
 | Highlight opacity         | 高亮透明度         |
 | Markdown comments folder  | Markdown 备份目录 |
 | Attachments folder        | 图片附件目录        |
+| Comments data folder      | 每文件 JSON comment sidecar 目录 |
+| Annotation output folder  | annotation note 输出根目录 |
+| Annotation path strategy  | annotation 路径策略：按 source key 或镜像原目录 |
+| Annotation category mappings | annotation 同步使用的分类/颜色映射 |
 | Orphaned comments         | 管理孤立评论        |
 
 ---
 
 ## ❓ 常见问题
+
+### Annotation notes 会自动同步吗？
+
+不会。当前 annotation sync 是刻意设计成手动触发的，需要从命令面板、侧边栏或设置页入口执行。
+
+### 如果我同时修改了 JSON comment 和 annotation note，会发生什么？
+
+插件会使用 `comment_hash_at_sync` 作为同步 baseline 检测漂移。如果两边自上次同步后都变了，反向回写会被阻止，需要人工确认。
 
 ### 为什么删除原文后评论还存在？
 
@@ -145,7 +228,7 @@ Open Side Comments View
 
 如果你遇到问题或有功能建议，欢迎提交 Issue：
 
-[https://github.com/jepicaju862-lab/Side-Comments](https://github.com/jepicaju862-lab/Side-Comments-origin)
+[Side Comments GitHub Repository](https://github.com/jepicaju862-lab/Side-Comments-origin)
 
 ---
 

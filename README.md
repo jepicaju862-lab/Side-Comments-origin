@@ -43,6 +43,24 @@ A sidebar annotation and commenting plugin for Obsidian. Side Comments allows yo
 * Export all comments into a beautifully formatted Markdown file.
 * Create standalone Markdown backups for long-term storage and synchronization.
 
+### 🔄 Annotation Sync
+
+* Manually sync the current file's comments into editable annotation notes.
+* Generated annotation notes include a controlled backlink block with exact jump URI.
+* Supports minimal reverse sync from annotation note comment body back into JSON comment data.
+* Built-in conflict blocking prevents overwriting when both JSON and annotation note changed after the last sync.
+
+### 🗂️ Settings-Driven Annotation Organization
+
+* Configure a dedicated annotation output folder.
+* Choose between:
+
+  * `group_by_source_key`
+  * `mirror_source_tree`
+
+* Customize category-to-color mappings used for generated annotation metadata.
+* The same configured mapping order is reused by the comment modal and selection toolbar color presets.
+
 ### 🧹 Orphaned Comment Detection
 
 * Automatically detects comments whose original text has been removed.
@@ -68,7 +86,7 @@ A sidebar annotation and commenting plugin for Obsidian. Side Comments allows yo
 2. Extract the plugin folder into your vault:
 
 ```bash
-<vault>/.obsidian/plugins/side-comments/
+<vault>/.obsidian/plugins/side-comments-origin/
 ```
 
 3. Reload Obsidian.
@@ -146,6 +164,21 @@ Inside the sidebar:
 * Sort comments by time or position
 * Edit or delete comments from the `...` menu
 
+### Sync Comments And Annotation Notes
+
+Use any of the following entry points:
+
+* Command palette: `Sync current file comments and annotations`
+* Sidebar toolbar sync button
+* Settings button: `Sync current file comments and annotations`
+
+Current sync behavior:
+
+* `source note -> annotation notes`
+* `annotation note controlled comment -> JSON comment`
+* no background auto-sync
+* conflict cases are blocked instead of silently overwriting
+
 ### Paste Images into Comments
 
 * Paste screenshots directly with `Ctrl+V` / `Cmd+V`
@@ -173,11 +206,23 @@ Click the **Export** button in the sidebar toolbar to generate a standalone Mark
 | **Highlight opacity**         | Adjust highlight transparency                   |
 | **Markdown comments folder**  | Folder used for Markdown backups                |
 | **Attachments folder**        | Folder for pasted image attachments             |
+| **Comments data folder**      | Folder used for per-file JSON comment sidecars  |
+| **Annotation output folder**  | Root folder for generated annotation notes      |
+| **Annotation path strategy**  | `group_by_source_key` or `mirror_source_tree`   |
+| **Annotation category mappings** | Category/color mapping for annotation sync   |
 | **Orphaned comments**         | Manage and clean orphaned comments              |
 
 ---
 
 ## ❓ FAQ
+
+### Are annotation notes synchronized automatically?
+
+No. Annotation sync is currently manual by design. You trigger it from the command palette, sidebar, or settings.
+
+### What happens if I edit both the JSON comment and the annotation note?
+
+The plugin uses a sync baseline (`comment_hash_at_sync`) to detect drift. If both sides changed after the last sync, reverse sync is blocked and you must resolve it manually.
 
 ### Why do comments remain after deleting the original text?
 

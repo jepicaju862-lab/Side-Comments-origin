@@ -1741,7 +1741,42 @@ export default class SideNote extends Plugin {
         return `${this.buildBacklinkSection(comment)}\n\n## 解释与扩展\n\n## 关联\n\n## 后续动作\n`;
     }
 
+    private findMarkerPositions(content: string, marker: string): number[] {
+        const positions: number[] = [];
+        let searchIndex = 0;
+        while (searchIndex < content.length) {
+            const foundIndex = content.indexOf(marker, searchIndex);
+            if (foundIndex === -1) {
+                break;
+            }
+            positions.push(foundIndex);
+            searchIndex = foundIndex + marker.length;
+        }
+        return positions;
+    }
+
+    private getControlledBacklinkBlockBounds(content: string): { startIndex: number; endIndex: number } {
+        const startPositions = this.findMarkerPositions(content, CONTROLLED_BLOCK_START);
+        const endPositions = this.findMarkerPositions(content, CONTROLLED_BLOCK_END);
+        if (startPositions.length === 0 && endPositions.length === 0) {
+            throw new Error("Controlled backlink block not found.");
+        }
+        if (startPositions.length !== 1 || endPositions.length !== 1) {
+            throw new Error("Controlled backlink block markers must each appear exactly once.");
+        }
+
+        const startIndex = startPositions[0];
+        const endIndex = endPositions[0];
+        if (endIndex <= startIndex) {
+            throw new Error("Controlled backlink block markers are malformed.");
+        }
+
+        return { startIndex, endIndex };
+    }
+
     private replaceBacklinkSection(content: string, comment: Comment): string {
+        this.getControlledBacklinkBlockBounds(content);
+
         const section = this.buildBacklinkSection(comment);
         const headingRegex = new RegExp(`^${this.escapeRegExp(BACKLINK_SECTION_HEADING)}\\s*$\\r?\\n?`, "gm");
         const controlledBlockRegex = new RegExp(
@@ -1765,15 +1800,17 @@ export default class SideNote extends Plugin {
     }
 
     private parseAnnotationBacklinkComment(content: string): string {
-        const startIndex = content.indexOf(CONTROLLED_BLOCK_START);
-        const endIndex = content.indexOf(CONTROLLED_BLOCK_END);
-        if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
-            throw new Error("Controlled backlink block not found.");
-        }
+        const { startIndex, endIndex } = this.getControlledBacklinkBlockBounds(content);
 
         const block = content.slice(startIndex + CONTROLLED_BLOCK_START.length, endIndex);
         const lines = block.split(/\r?\n/);
-        const commentHeadingIndex = lines.findIndex((line) => line.trim() === "> **批注**：");
+        const headingIndices = lines.reduce<number[]>((indices, line, index) => {
+            if (/^>\s*\*\*.+\*\*[\uFF1A:]\s*$/.test(line.trim())) {
+                indices.push(index);
+            }
+            return indices;
+        }, []);
+        const commentHeadingIndex = headingIndices.length > 0 ? headingIndices[headingIndices.length - 1] : -1;
         if (commentHeadingIndex === -1) {
             throw new Error("Controlled comment heading not found.");
         }
@@ -1788,7 +1825,7 @@ export default class SideNote extends Plugin {
             commentLines.pop();
         }
         const commentText = commentLines.join("\n");
-        return commentText === "（无）" ? "" : commentText;
+        return /^[?(]\s*\u65e0\s*[?)]$/u.test(commentText.trim()) ? "" : commentText;
     }
 
     private async evaluateAnnotationCommentSyncState(
@@ -1989,6 +2026,7 @@ export default class SideNote extends Plugin {
 
         const currentContent = await this.app.vault.read(existingFile);
         const existingFrontmatter = (this.app.metadataCache.getFileCache(existingFile)?.frontmatter || {}) as Record<string, any>;
+        let contentDraft: string;
         try {
             const syncState = await this.evaluateAnnotationCommentSyncState(currentContent, existingFrontmatter, comment.comment || "");
             if (syncState.conflict) {
@@ -1997,6 +2035,7 @@ export default class SideNote extends Plugin {
                     reason: "conflict",
                 };
             }
+            contentDraft = this.replaceBacklinkSection(currentContent, comment);
         } catch (error) {
             const message = error instanceof Error ? error.message : "Unknown parse error.";
             return {
@@ -2006,12 +2045,16 @@ export default class SideNote extends Plugin {
             };
         }
         const draftFrontmatter = await this.buildManagedAnnotationFrontmatter(file, comment, existingFrontmatter, { refreshSyncMetadata: false });
-        const contentDraft = this.replaceBacklinkSection(currentContent, comment);
         const managedChanged = this.hasManagedFrontmatterChange(existingFrontmatter, draftFrontmatter);
         const contentChanged = contentDraft !== currentContent;
 
         if (!managedChanged && !contentChanged) {
             return { status: "noop" };
+        }
+
+        if (contentChanged && !managedChanged) {
+            await this.app.vault.modify(existingFile, contentDraft);
+            return { status: "updated" };
         }
 
         const next = await this.buildManagedAnnotationFrontmatter(file, comment, existingFrontmatter, { refreshSyncMetadata: true });
@@ -2044,8 +2087,9 @@ export default class SideNote extends Plugin {
             }
         });
 
-        const updatedContent = this.replaceBacklinkSection(currentContent, comment);
         if (contentChanged) {
+            const refreshedContent = await this.app.vault.read(existingFile);
+            const updatedContent = this.replaceBacklinkSection(refreshedContent, comment);
             await this.app.vault.modify(existingFile, updatedContent);
         }
         return { status: "updated" };

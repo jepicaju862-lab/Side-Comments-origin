@@ -1799,21 +1799,26 @@ export default class SideNote extends Plugin {
         return `${section}\n\n${stripManagedSection(content)}`;
     }
 
+    private isCommentHeadingLine(line: string): boolean {
+        return /^>\s*\*\*\u6279\u6ce8\*\*[\uFF1A:]\s*$/u.test(line.trim());
+    }
+
+    private isEmptyCommentPlaceholder(commentText: string): boolean {
+        return /^[\uFF08(]\s*\u65e0\s*[\uFF09)]$/u.test(commentText.trim());
+    }
+
     private parseAnnotationBacklinkComment(content: string): string {
         const { startIndex, endIndex } = this.getControlledBacklinkBlockBounds(content);
 
         const block = content.slice(startIndex + CONTROLLED_BLOCK_START.length, endIndex);
         const lines = block.split(/\r?\n/);
-        const headingIndices = lines.reduce<number[]>((indices, line, index) => {
-            if (/^>\s*\*\*.+\*\*[\uFF1A:]\s*$/.test(line.trim())) {
-                indices.push(index);
-            }
-            return indices;
-        }, []);
-        const commentHeadingIndex = headingIndices.length > 0 ? headingIndices[headingIndices.length - 1] : -1;
-        if (commentHeadingIndex === -1) {
-            throw new Error("Controlled comment heading not found.");
+        const commentHeadingIndices = lines
+            .map((line, index) => this.isCommentHeadingLine(line) ? index : -1)
+            .filter((index) => index >= 0);
+        if (commentHeadingIndices.length !== 1) {
+            throw new Error("Controlled comment heading must appear exactly once.");
         }
+        const commentHeadingIndex = commentHeadingIndices[0];
 
         const commentLines = lines.slice(commentHeadingIndex + 1).map((line) => {
             if (line === ">") return "";
@@ -1825,7 +1830,7 @@ export default class SideNote extends Plugin {
             commentLines.pop();
         }
         const commentText = commentLines.join("\n");
-        return /^[?(]\s*\u65e0\s*[?)]$/u.test(commentText.trim()) ? "" : commentText;
+        return this.isEmptyCommentPlaceholder(commentText) ? "" : commentText;
     }
 
     private async evaluateAnnotationCommentSyncState(

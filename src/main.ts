@@ -152,6 +152,8 @@ class SideNoteView extends ItemView {
     }
 
     public renderView() {
+        this.plugin.unloadMarkdownRenderComponentsUnder?.(this.containerEl);
+
         // 修改点 2：在清空前保存滚动位置
         const currentContainer = this.containerEl.querySelector(".sidenote-comments-list-wrapper");
         if (currentContainer) {
@@ -360,11 +362,14 @@ class SideNoteView extends ItemView {
                         if (el !== menuContainer) el.classList.remove('visible');
                     });
                     menuContainer.classList.toggle("visible");
+                    if (menuContainer.classList.contains("visible")) {
+                        setTimeout(() => {
+                            document.addEventListener("click", (e) => {
+                                if (!menuButton.contains(e.target as Node)) menuContainer.classList.remove("visible");
+                            }, { once: true, capture: true });
+                        }, 0);
+                    }
                 };
-
-                document.addEventListener("click", (e) => {
-                    if (!menuButton.contains(e.target as Node)) menuContainer.classList.remove("visible");
-                }, { once: true, capture: true });
             });
         } else {
             const emptyStateEl = container.createDiv("sidenote-empty-state");
@@ -442,7 +447,9 @@ class SideNoteView extends ItemView {
     }
 
     getState(): CustomViewState { return { filePath: this.file ? this.file.path : null }; }
-    onunload() {}
+    onunload() {
+        this.plugin.unloadMarkdownRenderComponentsUnder?.(this.containerEl);
+    }
 }
 
 async function switchToSideNoteView(app: App) {
@@ -612,6 +619,7 @@ class CommentModal extends Modal {
         updateBtn.onclick = () => this.submitForm();
 
         this.onClose = () => {
+            this.plugin.unloadMarkdownRenderComponentsUnder?.(this.contentEl);
             document.querySelectorAll('.sidenote-selection-toolbar').forEach(el => el.remove());
         };
         
@@ -805,10 +813,14 @@ export default class SideNote extends Plugin {
     private isSaving: boolean = false;
     private editorViews: Set<EditorView> = new Set();
     private renderedTableHighlightTimers: number[] = [];
+    private modifyUpdateTimers: Map<string, number> = new Map();
+    private markdownRenderComponents: Map<HTMLElement, Component> = new Map();
 
     public async renderCommentContent(markdown: string, container: HTMLElement, sourcePath: string) {
+        this.unloadMarkdownRenderComponentsUnder(container);
         const component = new Component();
         component.load();
+        this.markdownRenderComponents.set(container, component);
         await MarkdownRenderer.renderMarkdown(markdown, container, sourcePath, component);
         container.addEventListener("click", (e) => {
             const target = e.target as HTMLElement;
@@ -869,6 +881,15 @@ export default class SideNote extends Plugin {
                         img.style.display = 'block';
                     }
                  }
+            }
+        });
+    }
+
+    public unloadMarkdownRenderComponentsUnder(root: HTMLElement) {
+        this.markdownRenderComponents.forEach((component, container) => {
+            if (!container.isConnected || container === root || root.contains(container)) {
+                component.unload();
+                this.markdownRenderComponents.delete(container);
             }
         });
     }
@@ -1725,36 +1746,72 @@ export default class SideNote extends Plugin {
                     this.scheduleRenderedTableHighlights();
                 } catch (error) { console.error("Error reloading plugin data:", error); }
             } else if (file instanceof TFile && file.extension === 'md') {
-                try {
-                    // Track orphans before update
-                    const beforeOrphanTimestamps = new Set(
-                        this.commentManager.getCommentsForFile(file.path)
-                            .filter(c => c.isOrphaned)
-                            .map(c => c.timestamp)
-                    );
-
-                    const fileContent = await this.app.vault.read(file);
-                    await this.commentManager.updateCommentCoordinatesForFile(fileContent, file.path);
-                    await this.saveCommentsForSingleFile(file.path);
-                    this.refreshViews();
-                    this.refreshEditorDecorations();
-                    this.scheduleRenderedTableHighlights();
-
-                    // Detect newly orphaned comments
-                    const newOrphans = this.commentManager.getCommentsForFile(file.path)
-                        .filter(c => c.isOrphaned && !beforeOrphanTimestamps.has(c.timestamp));
-                    if (newOrphans.length > 0) {
-                        this.pendingOrphans.push(...newOrphans);
-                        if (this.orphanNoticeTimer) clearTimeout(this.orphanNoticeTimer);
-                        this.orphanNoticeTimer = setTimeout(() => {
-                            const uniqueOrphans = [...new Map(this.pendingOrphans.map(o => [o.timestamp, o])).values()];
-                            this.showOrphanDeletionNotice(uniqueOrphans);
-                            this.pendingOrphans = [];
-                        }, 2000);
-                    }
-                } catch (error) { console.error("Error updating comment coordinates:", error); }
+                this.scheduleCommentCoordinateUpdate(file);
             }
         }));
+    }
+
+    private scheduleCommentCoordinateUpdate(file: TFile) {
+        const filePath = file.path;
+        const existingTimer = this.modifyUpdateTimers.get(filePath);
+        if (existingTimer) window.clearTimeout(existingTimer);
+
+        const timer = window.setTimeout(() => {
+            this.modifyUpdateTimers.delete(filePath);
+            void this.updateCommentCoordinatesForModifiedFile(filePath);
+        }, 800);
+        this.modifyUpdateTimers.set(filePath, timer);
+    }
+
+    private async updateCommentCoordinatesForModifiedFile(filePath: string) {
+        if (this.isSaving) return;
+
+        const file = this.app.vault.getAbstractFileByPath(filePath);
+        if (!(file instanceof TFile) || file.extension !== 'md') return;
+
+        try {
+            const beforeOrphanTimestamps = new Set(
+                this.commentManager.getCommentsForFile(file.path)
+                    .filter(c => c.isOrphaned)
+                    .map(c => c.timestamp)
+            );
+
+            const fileContent = await this.app.vault.cachedRead(file);
+            await this.commentManager.updateCommentCoordinatesForFile(fileContent, file.path);
+            await this.saveCommentsForSingleFile(file.path);
+            this.refreshViews();
+            this.refreshEditorDecorations();
+
+            const newOrphans = this.commentManager.getCommentsForFile(file.path)
+                .filter(c => c.isOrphaned && !beforeOrphanTimestamps.has(c.timestamp));
+            if (newOrphans.length > 0) {
+                this.pendingOrphans.push(...newOrphans);
+                if (this.orphanNoticeTimer) clearTimeout(this.orphanNoticeTimer);
+                this.orphanNoticeTimer = setTimeout(() => {
+                    const uniqueOrphans = [...new Map(this.pendingOrphans.map(o => [o.timestamp, o])).values()];
+                    this.showOrphanDeletionNotice(uniqueOrphans);
+                    this.pendingOrphans = [];
+                }, 2000);
+            }
+        } catch (error) {
+            console.error("Error updating comment coordinates:", error);
+        }
+    }
+
+    onunload() {
+        if (this.orphanNoticeTimer) {
+            clearTimeout(this.orphanNoticeTimer);
+            this.orphanNoticeTimer = null;
+        }
+        this.pendingOrphans = [];
+        this.renderedTableHighlightTimers.forEach(timer => window.clearTimeout(timer));
+        this.renderedTableHighlightTimers = [];
+        this.modifyUpdateTimers.forEach(timer => window.clearTimeout(timer));
+        this.modifyUpdateTimers.clear();
+        document.querySelectorAll('.sidenote-selection-toolbar').forEach(el => el.remove());
+        this.unloadMarkdownRenderComponentsUnder(document.body);
+        document.getElementById("sidenote-dynamic-styles")?.remove();
+        this.editorViews.clear();
     }
 
     private injectStyles() {
@@ -1948,6 +2005,7 @@ export default class SideNote extends Plugin {
         return ViewPlugin.fromClass(class {
             toolbar: HTMLElement | null = null;
             view: EditorView;
+            private selectionCheckTimer: number | null = null;
             
             constructor(view: EditorView) {
                 this.view = view;
@@ -1955,7 +2013,11 @@ export default class SideNote extends Plugin {
 
             update(update: ViewUpdate) {
                 if (update.selectionSet || update.viewportChanged) {
-                    setTimeout(() => this.checkSelection(), 10);
+                    if (this.selectionCheckTimer) window.clearTimeout(this.selectionCheckTimer);
+                    this.selectionCheckTimer = window.setTimeout(() => {
+                        this.selectionCheckTimer = null;
+                        this.checkSelection();
+                    }, 50);
                 }
             }
 
@@ -2053,6 +2115,10 @@ export default class SideNote extends Plugin {
             }
 
             destroy() {
+                if (this.selectionCheckTimer) {
+                    window.clearTimeout(this.selectionCheckTimer);
+                    this.selectionCheckTimer = null;
+                }
                 this.hideToolbar();
             }
 
@@ -2184,18 +2250,23 @@ export default class SideNote extends Plugin {
         const highlightPlugin = ViewPlugin.fromClass(class {
             decorations: DecorationSet;
             view: EditorView;
+            private handleClickBound: (event: MouseEvent) => void;
+            private handleDoubleClickBound: (event: MouseEvent) => void;
+
             constructor(view: EditorView) {
                 this.view = view;
+                this.handleClickBound = this.handleClick.bind(this);
+                this.handleDoubleClickBound = this.handleDoubleClick.bind(this);
                 plugin.editorViews.add(view);
                 this.decorations = this.buildDecorations(view);
                 window.setTimeout(() => plugin.applyRenderedTableHighlights(view), 0);
-                this.view.dom.addEventListener('click', this.handleClick.bind(this));
-                this.view.dom.addEventListener('dblclick', this.handleDoubleClick.bind(this));
+                this.view.dom.addEventListener('click', this.handleClickBound);
+                this.view.dom.addEventListener('dblclick', this.handleDoubleClickBound);
             }
             destroy() { 
                 plugin.editorViews.delete(this.view);
-                this.view.dom.removeEventListener('click', this.handleClick.bind(this));
-                this.view.dom.removeEventListener('dblclick', this.handleDoubleClick.bind(this));
+                this.view.dom.removeEventListener('click', this.handleClickBound);
+                this.view.dom.removeEventListener('dblclick', this.handleDoubleClickBound);
             }
             handleClick(event: MouseEvent) {
                 const target = event.target as HTMLElement;

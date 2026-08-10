@@ -1,78 +1,137 @@
 [![English](https://img.shields.io/badge/Language-English-blue)](README.md)
 [![简体中文](https://img.shields.io/badge/Language-简体中文-red)](README.zh-CN.md)
 
-# Side-Comments-origin
+# Side Comments origin
 
-A sidebar annotation and commenting plugin for Obsidian. Side Comments allows you to highlight any text in your notes and attach standalone comments with Markdown support, image embedding, hover preview, and centralized sidebar management.
+A local, non-intrusive sidebar annotation plugin for Obsidian. Select text in a
+Markdown note, apply a visual mark, and attach standalone Markdown comments
+without inserting extra syntax into the original note.
+
+- **Website:** [peyote.info](https://peyote.info/)
+
+
+> **Interface language:** plugin commands, settings, and most interface text are
+> currently in Simplified Chinese.
 
 ## 🌟 Features
 
-### ✍️ Text Annotation
+### ✍️ Text Annotation and Visual Marks
 
-* Select any text in a Markdown note and attach comments instantly.
-* Highlighted text is visually marked inside the editor.
+- Select text in a Markdown note and attach a standalone comment.
+- Choose from four visual styles: **highlight, underline, strikethrough, and
+  bold**.
+- Assign one of five preset colors or a custom color to each annotation.
+- Existing annotated selections are recognized and edited instead of duplicated.
+- Visual marks appear in both editing view and reading view.
+
+The four styles are visual choices only. Version 1.0.4 does not add semantic
+categories such as note, question, task, or warning, and it does not add a
+resolved state.
 
 ### 🛠️ Selection Toolbar
 
-* Floating toolbar automatically appears after text selection.
-* Quickly add comments or change highlight colors.
+- A floating toolbar appears after selecting text in editing view.
+- Apply a visual style, choose a color, or open the annotation editor directly.
+- The toolbar restores the style and color of an existing annotation.
+- The feature can be disabled in Settings.
+
+Comments can also be created from the context menu, command palette, or custom
+hotkeys.
+
+### 👁️ Editing and Reading Views
+
+| Action | Editing view | Reading view |
+| :--- | :--- | :--- |
+| Click a mark | Locate its sidebar card | Locate its sidebar card |
+| Double-click a mark | Open the annotation editor | Open the annotation editor |
+| Hover a mark | Show a compact hint | Preview content and quick actions |
+| Modifier-click a link | Preserve editor behavior | Preserve normal link opening |
+
+Opening an annotation from any entry point reuses the same editor window.
+Version 1.0.4 fixes the issue where a double-click could open editors for
+multiple annotations at once.
 
 ### 💬 Hover Preview
 
-* Hover over highlighted text to preview comment content in a tooltip.
-* Supports Markdown rendering, links, and images.
+- Hover over marked text in reading view to preview rendered comment content.
+- Markdown, links, and embedded images are supported.
+- Quick actions can open the sidebar or edit the annotation.
 
 ### 📑 Sidebar Comment Management
 
-* Dedicated **Side Comments View** for managing all comments in the current document.
-* Quickly jump to the original annotated text.
-* Supports:
+The dedicated **Side Comments View** follows the active Markdown note.
 
-  * Sorting by timestamp or document position
-  * Global search
-  * Edit / Delete actions
+- View annotations as cards and jump to their original text.
+- Search quoted text and annotation content in the current note.
+- Sort by document position or creation time.
+- Collapse or expand all annotation bodies.
+- Edit, copy a precise backlink, search the vault, or delete an annotation.
+- Restore a deleted annotation for seven seconds.
+- Use style icons and colored borders to identify annotations quickly.
 
-### 🖼️ Markdown & Image Support
+### 🖼️ Markdown and Image Support
 
-* Full Markdown rendering inside comments.
-* Paste or drag images directly into the comment editor.
-* Images are automatically stored in a configurable attachments folder.
+- Write annotation content in Markdown.
+- Paste images directly into the annotation editor.
+- Images are stored in a configurable attachment folder inside the vault.
+- The editor supports dragging, automatic textarea growth, and focus recovery.
 
-### 📤 Export & Backup
+### 📤 Export and Backup
 
-* Export all comments into a beautifully formatted Markdown file.
-* Create standalone Markdown backups for long-term storage and synchronization.
+- Export all annotations for the current note as a Markdown summary.
+- Copy a precise Obsidian callout backlink containing the quote, annotation, and
+  an `obsidian://sidenote` jump link.
+- Export the current Markdown note to `.docx` with locatable annotations
+  preserved as native Word comments.
+- Create standalone Markdown backups for long-term storage and synchronization.
 
-### 🧹 Orphaned Comment Detection
+### 🧭 Text Tracking and Orphaned Comments
 
-* Automatically detects comments whose original text has been removed.
-* Orphaned comments are displayed with red dashed highlights.
-* One-click cleanup available in settings.
+Annotations are relocated using document positions, absolute offsets, selected
+text and its SHA-256 hash, heading paths, occurrence indexes, and surrounding
+context.
+
+- Moved text is matched again and its coordinates are updated when possible.
+- An annotation becomes orphaned only when the original text can no longer be
+  found reliably.
+- Settings shows the orphan count and provides batch cleanup.
+
+### ⌨️ Accessible and Mobile Interaction
+
+- Sidebar cards and menus support keyboard navigation.
+- Annotation editors stay inside the mobile viewport.
+- Style, color, and menu buttons use touch-friendly sizes.
+- The selection toolbar scrolls horizontally on narrow screens.
+- Long-press text selection works with commands and the selection toolbar.
 
 ---
 
 ## 📥 Installation
 
-### Option 1: Community Plugins (Recommended)
+### Option 1: Community Plugins
 
-*Once the plugin is available in the official community plugin directory:*
+Once the plugin is available in the official Community Plugins directory:
 
-1. Open Obsidian **Settings** → **Community Plugins**.
-2. Disable **Safe Mode**.
-3. Click **Browse** and search for **"Side Comments"**.
-4. Click **Install**, then **Enable** the plugin.
+1. Open Obsidian **Settings → Community plugins**.
+2. Select **Browse** and search for **Side Comments origin**.
+3. Select **Install**, then enable the plugin.
 
 ### Option 2: Manual Installation
 
-1. Download the latest release from the [GitHub Releases Page](https://github.com/jepicaju862-lab/Side-Comments-origin/releases).
-2. Extract the plugin folder into your vault:
+1. Download the latest release from the
+   [GitHub Releases page](https://github.com/jepicaju862-lab/Side-Comments-origin/releases).
+2. Copy these files into the plugin directory:
+   - `main.js`
+   - `manifest.json`
+   - `styles.css`
+3. The final directory should be:
 
-```bash
-<vault>/.obsidian/plugins/side-comments/
+```text
+<vault>/.obsidian/plugins/side-comments-origin/
 ```
 
-3. Reload Obsidian.
-4. Enable **Side Comments** in **Settings → Community Plugins**.
+4. Reload Obsidian.
+5. Enable **Side Comments origin** in **Settings → Community plugins**.
 
 ---
 
@@ -80,104 +139,186 @@ A sidebar annotation and commenting plugin for Obsidian. Side Comments allows yo
 
 ### Add a Comment
 
-1. Select any text in a Markdown note.
-2. The **Selection Toolbar** will appear automatically.
-3. Click the **Add Comment** button.
-4. Enter your comment in the popup editor.
-5. Optionally choose a custom highlight color.
-6. Press `Ctrl+Enter` (`Cmd+Enter` on macOS) or click **Save**.
+1. Select text in a Markdown editing view.
+2. Choose a visual style and color from the selection toolbar.
+3. Open the annotation editor when you want to add Markdown content.
+4. Select **添加** (*Add*) or press `Ctrl/Cmd + Enter` to save.
 
 ### Open Side Comments View
 
-Use the command palette and run:
+Run one of these commands from the command palette:
 
-```text
-Open Side Comments View
-```
+- **在侧边栏打开批注视图** — open in the sidebar
+- **在分屏中打开批注视图** — open in a split
 
-Inside the sidebar:
-
-* View all comments as cards
-* Click cards to jump to original text
-* Sort comments by time or position
-* Edit or delete comments from the `...` menu
+Inside the view, click a card to locate its source text or double-click it to
+edit. Additional actions are available from the card menu.
 
 ### Paste Images into Comments
 
-* Paste screenshots directly with `Ctrl+V` / `Cmd+V`
-* Or drag and drop images into the editor
-* Images are automatically saved and linked using Markdown syntax
+Paste a screenshot or image with `Ctrl+V` / `Cmd+V` while the annotation editor
+is focused. The image is saved to the configured attachment folder and linked
+using Markdown syntax.
 
 ### Export Comments
 
-Click the **Export** button in the sidebar toolbar to generate a standalone Markdown summary file containing:
+Use the export action in the sidebar to generate a Markdown summary containing
+the original quoted text, annotation content, and structured callouts.
 
-* Original quoted text
-* Related annotations
-* Structured callout formatting
+---
+
+## ⌨️ Keyboard Shortcuts
+
+### Annotation Editor
+
+| Key | Action |
+| :--- | :--- |
+| `Ctrl/Cmd + Enter` | Save the annotation |
+| `Esc` | Close the editor |
+| `←` / `→` | Move between visual styles |
+| `Home` / `End` | Move to the first or last style |
+
+### Sidebar
+
+| Key | Action |
+| :--- | :--- |
+| `Tab` | Focus cards and action buttons |
+| `Enter` / `Space` | Locate the focused annotation |
+| `F2` | Edit the focused annotation |
+| `↑` / `↓` | Move through an action menu |
+| `Home` / `End` | Move to the first or last menu item |
+| `Esc` | Close the menu and return focus |
 
 ---
 
 ## ⚙️ Settings
 
-| Option                        | Description                                     |
-| :---------------------------- | :---------------------------------------------- |
-| **Comment sort order**        | Sort comments by timestamp or document position |
-| **Show highlights in editor** | Toggle inline highlight rendering               |
-| **Enable selection toolbar**  | Enable/disable floating selection toolbar       |
-| **Highlight color**           | Default highlight color                         |
-| **Highlight opacity**         | Adjust highlight transparency                   |
-| **Markdown comments folder**  | Folder used for Markdown backups                |
-| **Attachments folder**        | Folder for pasted image attachments             |
-| **Orphaned comments**         | Manage and clean orphaned comments              |
+| Option | Description |
+| :--- | :--- |
+| **Comment sort order** | Sort by document position or creation time |
+| **Show annotation marks** | Toggle marks in editing and reading views |
+| **Enable selection toolbar** | Show quick actions after selecting text |
+| **Default color** | Apply a color to newly created annotations |
+| **Mark opacity** | Adjust visual mark opacity |
+| **Markdown backup folder** | Defaults to `side-note-comments` |
+| **Attachments folder** | Defaults to `side-note-attachments` |
+| **Annotation data folder** | Defaults to `side-note-data`; reload after changing it |
+| **Create Markdown backup** | Generate a manual annotation backup |
+| **Orphaned annotations** | Inspect and remove annotations that cannot be located |
+
+---
+
+## 🔒 Data and Privacy
+
+- Annotations are stored per note as JSON in `side-note-data` by default.
+- Plugin settings and legacy migration state are stored in `data.json`.
+- Pasted images are stored in `side-note-attachments` by default.
+- Manual Markdown backups are stored in `side-note-comments` by default.
+- All folders are inside the vault and can be changed in Settings.
+- Note renames update their annotation references.
+- The plugin code makes no network requests.
+
+### Backward Compatibility
+
+- An older annotation without `markType` is displayed as a highlight.
+- An older annotation without its own color uses the plugin default.
+- Legacy annotations in `data.json` are migrated to per-note JSON files.
+- Version 1.0.4 does not change the meaning of existing annotations.
+
+Back up your vault, or at least the annotation data folder, before a major
+upgrade.
 
 ---
 
 ## ❓ FAQ
 
-### Why do comments remain after deleting the original text?
+### Can comments be displayed and edited in reading view?
 
-Comments are linked using text anchors. If the original content is removed, the comment becomes an orphaned comment. You can remove them manually or use the cleanup option in settings.
+Yes. Marks are rendered in reading view. Click a mark to locate its sidebar
+card, double-click to edit, or hover to preview the annotation and quick actions.
 
-### Can I change the color of a comment?
+### Can I change the style and color of an existing annotation?
 
-Yes. Edit the comment from the sidebar or use the color picker in the selection toolbar.
+Yes. Open the annotation editor from the text mark or sidebar card, then choose
+another visual style, preset color, or custom color.
 
-### Why was the popup menu hidden or clipped?
+### Why does an annotation remain after deleting the original text?
 
-This issue was fixed in `v1.0.3` by improving CSS stacking order and overflow handling. Please update to the latest version.
+Annotations are stored independently from Markdown. If the original text can no
+longer be found, the annotation becomes orphaned and can be removed from
+Settings.
+
+### Why did double-clicking one annotation open many editor windows?
+
+This was caused by duplicate event handling and is fixed in v1.0.4. The plugin
+now keeps only one annotation editor open at a time.
+
+### Where is annotation data stored?
+
+By default, per-note JSON files are stored in `side-note-data` inside the vault.
+The folder can be changed in Settings.
 
 ---
 
-## 🤝 Support & Feedback
+## 🧑‍💻 Development
 
-If you encounter issues or have feature requests, please open an issue on the repository:
+```bash
+npm install
+npm run build
+```
 
-[Side Comments GitHub Repository](https://github.com/jepicaju862-lab/Side-Comments-origin)
+The production build runs a TypeScript check and writes `main.js` to the
+repository root.
+
+## 📋 Release Notes
+
+Version 1.0.4 adds reading-view interaction, four visual mark styles, independent
+colors, the selection toolbar, a unified editor, sidebar workflow improvements,
+Word export, Markdown backups, attachments, precise backlinks, mobile and
+accessibility fixes, and the multiple-editor fix.
+
+See [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full change list.
+
+---
+
+## 🤝 Support and Feedback
+
+- **Bug reports — [this repository's issue tracker][issues].** Include your
+  Obsidian version, operating system, a minimal Markdown note, and the related
+  annotation JSON from `side-note-data` whenever possible.
+- **Questions and discussion — QQ group `1094620986`.** The group communicates
+  in Simplified Chinese.
+- **Email — <jepicaju862@gmail.com>.** Use email for private reproduction files
+  or anything you would rather not post publicly.
+- **Official website — [peyote.info](https://peyote.info/).**
+
+[issues]: ../../issues
 
 ---
 
 ## 📄 License
 
-MIT License
+[GNU General Public License v3.0](LICENSE)
 
 ---
+
 ## 🙏 Acknowledgements
 
-This project was inspired by and references ideas from several excellent open-source annotation and commenting plugins.
+This project was inspired by and references ideas from excellent open-source
+annotation and commenting plugins:
 
-Special thanks to the following projects and their contributors:
+- [HiNote](https://github.com/catmuse/HiNote) — inline annotation interactions,
+  document highlighting workflows, and reading-note experiences.
+- [SideNote](https://github.com/mofukuru/SideNote) — sidebar annotation
+  management, comment organization, and interaction design.
 
-- https://github.com/catmuse/HiNote  
-  For inspiration on inline annotation interactions, document highlighting workflows, and reading-note experiences.
+Thank you to the open-source community and every contributor who shared ideas,
+implementations, and user experience explorations.
 
-- https://github.com/mofukuru/SideNote  
-  For ideas related to sidebar-based annotation management, comment organization, and user interaction design.
-
-We sincerely appreciate the open-source community for sharing ideas, implementations, and user experience explorations that helped shape this project.
 ---
+
 ## 📬 Contact
 
-Feel free to join the community for discussions, updates, and bug reports:
-
-* **QQ Group**: `1094620986`
+- **QQ group:** `1094620986`
+- **Email:** <jepicaju862@gmail.com>
+- **Website:** [peyote.info](https://peyote.info/)

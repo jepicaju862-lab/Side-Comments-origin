@@ -4,43 +4,9 @@ import { MarkdownPostProcessorContext, MarkdownRenderChild } from "obsidian";
 import { exportNoteToDocx } from "./wordExporter";
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate, hoverTooltip } from "@codemirror/view";
 import { RangeSetBuilder, StateEffect } from "@codemirror/state";
+import { generateBinaryHash, generateHash } from "./hash";
 
 // --- Helper Functions ---
-
-// Helper function to generate SHA256 hash
-async function generateHash(text: string): Promise<string> {
-    try {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(text);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    } catch (error) {
-        try {
-            const nodeCrypto = require('crypto');
-            return nodeCrypto.createHash('sha256').update(text).digest('hex');
-        } catch {
-            let hash = 0;
-            for (let i = 0; i < text.length; i++) {
-                const char = text.charCodeAt(i);
-                hash = ((hash << 5) - hash) + char;
-                hash = hash & hash;
-            }
-            return Math.abs(hash).toString(16);
-        }
-    }
-}
-
-async function generateBinaryHash(buffer: ArrayBuffer): Promise<string> {
-    try {
-        const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    } catch (error) {
-        const nodeCrypto = require('crypto');
-        return nodeCrypto.createHash('sha256').update(Buffer.from(buffer)).digest('hex');
-    }
-}
 
 const forceUpdateEffect = StateEffect.define<null>();
 type CommentMarkType = NonNullable<Comment['markType']>;
@@ -769,8 +735,8 @@ class CommentModal {
         this.textareaEl = textarea;
 
         const autoResize = () => {
-            textarea.style.height = 'auto';
-            textarea.style.height = Math.min(textarea.scrollHeight, 260) + 'px';
+            textarea.setCssStyles({ height: 'auto' });
+            textarea.setCssStyles({ height: `${Math.min(textarea.scrollHeight, 260)}px` });
         };
 
         textarea.oninput = (e: Event) => {
@@ -914,19 +880,19 @@ class CommentModal {
         let isDragging = false;
         let startX = 0, startY = 0, origLeft = 0, origTop = 0;
 
-        handle.style.cursor = 'grab';
+        handle.classList.add('sidenote-modal-drag-handle');
 
         handle.addEventListener('pointerdown', (e: PointerEvent) => {
             const target = e.target as HTMLElement;
             if (target.closest('button, input, textarea')) return;
             isDragging = true;
-            handle.style.cursor = 'grabbing';
+            handle.classList.add('is-dragging');
             startX = e.clientX;
             startY = e.clientY;
             const rect = el.getBoundingClientRect();
             origLeft = rect.left;
             origTop = rect.top;
-            el.style.transform = 'none';
+            el.classList.add('sidenote-modal-drag-positioned');
             el.style.left = origLeft + 'px';
             el.style.top = origTop + 'px';
 
@@ -939,7 +905,7 @@ class CommentModal {
             };
             const onUp = () => {
                 isDragging = false;
-                handle.style.cursor = 'grab';
+                handle.classList.remove('is-dragging');
                 document.removeEventListener('pointermove', onMove);
                 document.removeEventListener('pointerup', onUp);
                 document.removeEventListener('pointercancel', onUp);
@@ -1076,11 +1042,10 @@ class SideNoteSettingTab extends PluginSettingTab {
                     this.plugin.settings.enableSelectionToolbar = value;
                     await this.plugin.saveData();
                 }));
-        containerEl.createEl("h3", { text: "快捷键设置" });
-        containerEl.createEl("p", {
-            text: "加粗、高亮、批注、下划线都已注册为 Obsidian 命令，可在 Obsidian 快捷键设置中自定义绑定。",
-            cls: "setting-item-description"
-        });
+        new Setting(containerEl)
+            .setName("快捷键设置")
+            .setDesc("加粗、高亮、批注、下划线都已注册为 Obsidian 命令，可在 Obsidian 快捷键设置中自定义绑定。")
+            .setHeading();
         SHORTCUT_COMMANDS.forEach((command) => {
             new Setting(containerEl)
                 .setName(command.label)
@@ -1230,8 +1195,7 @@ export default class SideNote extends Plugin {
                         const img = document.createElement('img');
                         img.src = this.app.vault.getResourcePath(file);
                         img.alt = file.basename;
-                        img.style.maxWidth = '100%';
-                        img.style.display = 'block';
+                        img.classList.add('sidenote-embedded-image');
                         embedSpan.appendChild(img);
                         const parent = textNode.parentNode;
                         if (parent) {
@@ -1255,8 +1219,7 @@ export default class SideNote extends Plugin {
                         const img = embed.createEl('img');
                         img.src = this.app.vault.getResourcePath(file);
                         img.alt = file.basename;
-                        img.style.maxWidth = '100%';
-                        img.style.display = 'block';
+                        img.classList.add('sidenote-embedded-image');
                     }
                  }
             }
@@ -1369,9 +1332,8 @@ export default class SideNote extends Plugin {
     }
 
     private decodeHtmlEntities(text: string): string {
-        const textarea = document.createElement("textarea");
-        textarea.innerHTML = text;
-        return textarea.value;
+        const parsed = new DOMParser().parseFromString(text, "text/html");
+        return parsed.documentElement.textContent ?? text;
     }
 
     private stripMarkdownForReading(text: string): string {
@@ -1635,7 +1597,7 @@ export default class SideNote extends Plugin {
         const tooltip = document.createElement("div");
         tooltip.className = "sidenote-tooltip sidenote-reading-tooltip";
         tooltip.setAttribute("role", "tooltip");
-        tooltip.style.visibility = "hidden";
+        tooltip.classList.add("is-loading");
 
         const accentBar = tooltip.createDiv("sidenote-tooltip-accent");
         accentBar.style.background = comment.color || this.settings.highlightColor || "#FFC800";
@@ -1688,7 +1650,7 @@ export default class SideNote extends Plugin {
             return;
         }
 
-        tooltip.style.visibility = "";
+        tooltip.classList.remove("is-loading");
         this.positionReadingTooltip(anchor, tooltip);
     }
 
@@ -2429,9 +2391,7 @@ export default class SideNote extends Plugin {
         fragment.appendChild(span);
         fragment.appendChild(document.createElement('br'));
         const btnContainer = document.createElement('div');
-        btnContainer.style.display = 'flex';
-        btnContainer.style.gap = '8px';
-        btnContainer.style.marginTop = '8px';
+        btnContainer.className = 'sidenote-notice-actions';
         const deleteBtn = document.createElement('button');
         deleteBtn.textContent = '删除';
         deleteBtn.className = 'mod-warning';
@@ -2562,7 +2522,6 @@ export default class SideNote extends Plugin {
     async onload() {
         // Heal orphaned floating windows and stale cross-reload modal references first.
         CommentModal.closeActive();
-        this.injectStyles(); // 只注入动态变量
         await this.loadPluginData();
         this.commentManager = new CommentManager(this.comments);
         await this.migrateComments();
@@ -2680,7 +2639,8 @@ export default class SideNote extends Plugin {
             const dataFolder = normalizePath(this.settings.commentsDataFolder?.trim() || DEFAULT_SETTINGS.commentsDataFolder);
             if (file.path.startsWith(dataFolder + '/')) return;
 
-            if (file.path === '.obsidian/plugins/side-note/data.json' || (file instanceof TFile && file.name === 'data.json' && file.parent?.name === 'side-note')) {
+            const pluginDataPath = normalizePath(`${this.app.vault.configDir}/plugins/${this.manifest.id}/data.json`);
+            if (file.path === pluginDataPath || (file instanceof TFile && file.name === 'data.json' && file.parent?.name === this.manifest.id)) {
                 try {
                     await this.loadPluginData();
                     this.commentManager.updateComments(this.comments);
@@ -2729,29 +2689,6 @@ export default class SideNote extends Plugin {
             window.clearTimeout(this.orphanNoticeTimer);
             this.orphanNoticeTimer = null;
         }
-        document.getElementById("sidenote-dynamic-styles")?.remove();
-    }
-
-    private injectStyles() {
-        const styleId = "sidenote-dynamic-styles";
-        let styleTag = document.getElementById(styleId);
-        if (!styleTag) {
-            styleTag = document.createElement("style");
-            styleTag.id = styleId;
-            document.head.appendChild(styleTag);
-        }
-        // 仅保留需要 JavaScript 动态计算的颜色变量
-        // 具体的 CSS 样式规则现在由 styles.css 文件接管
-        styleTag.innerHTML = `
-            :root {
-                --sidenote-highlight-color: rgba(255, 208, 0, 0.2);
-                --sidenote-highlight-hover: rgba(255, 208, 0, 0.4);
-                --sidenote-highlight-border: rgba(255, 208, 0, 0.6);
-                --sidenote-orphaned-color: rgba(255, 80, 80, 0.2);
-                --sidenote-orphaned-hover: rgba(255, 80, 80, 0.3);
-                --sidenote-orphaned-border: rgba(255, 80, 80, 0.6);
-            }
-        `;
     }
 
     async activateViewAndHighlightComment(timestamp: number) {
@@ -3039,7 +2976,6 @@ export default class SideNote extends Plugin {
                 }
                 
                 activeToolbarController = { view: this.view, hideToolbar: () => this.hideToolbar() };
-                this.toolbar.style.display = 'flex';
                 const selectedText = this.view.state.sliceDoc(selection.from, selection.to);
                 const startLine = this.view.state.doc.lineAt(selection.from);
                 const endLine = this.view.state.doc.lineAt(selection.to);
@@ -3282,8 +3218,7 @@ export default class SideNote extends Plugin {
                 create(view) {
                     const dom = document.createElement("div");
                     dom.className = "sidenote-tooltip";
-                    dom.style.visibility = "hidden";
-                    dom.style.minHeight = "0";
+                    dom.classList.add("is-loading");
 
                     // 左侧颜色 accent bar
                     const accentBar = dom.createDiv("sidenote-tooltip-accent");
@@ -3303,8 +3238,7 @@ export default class SideNote extends Plugin {
 
                     (async () => {
                         await plugin.renderCommentContent(hoveredComment.comment || "", content, hoveredComment.filePath);
-                        dom.style.visibility = "";
-                        dom.style.minHeight = "";
+                        dom.classList.remove("is-loading");
                     })();
                     let tooltipHost: HTMLElement | null = null;
                     return {

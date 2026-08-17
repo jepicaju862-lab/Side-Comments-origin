@@ -1,10 +1,11 @@
 {
 	"name": "side-note",
-	"version": "1.0.7",
+	"version": "1.0.8",
 	"description": "Add comment on the part of sentence and refer in comment view.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
+		"lint": "eslint src",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"version": "node version-bump.mjs && git add manifest.json versions.json"
 	},
@@ -13,15 +14,20 @@
 	"license": "GPL-3.0-only",
 	"devDependencies": {
 		"@types/node": "^16.11.6",
-		"@typescript-eslint/eslint-plugin": "5.29.0",
-		"@typescript-eslint/parser": "5.29.0",
-		"builtin-modules": "3.3.0",
+		"@eslint/js": "^9.30.1",
+		"@typescript-eslint/eslint-plugin": "^8.35.1",
+		"@typescript-eslint/parser": "^8.35.1",
 		"esbuild": "^0.27.1",
+		"eslint": "^9.30.1",
+		"eslint-plugin-obsidianmd": "^0.4.1",
 		"obsidian": "latest",
 		"tslib": "2.4.0",
-		"typescript": "4.7.4"
+		"typescript": "^5.4.5",
+		"typescript-eslint": "^8.35.1"
 	},
 	"dependencies": {
+		"@codemirror/state": "^6.5.2",
+		"@codemirror/view": "^6.36.3",
 		"docx": "^8.5.0",
 		"lucide": "^1.16.0"
 	}

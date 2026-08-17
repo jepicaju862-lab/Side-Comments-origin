@@ -8,7 +8,7 @@ Markdown note, apply a visual mark, and attach standalone Markdown comments
 without inserting extra syntax into the original note.
 
 - **Website:** [peyote.info](https://peyote.info/)
-- **Current release:** [v1.0.7](https://github.com/jepicaju862-lab/Side-Comments-origin/releases/tag/1.0.7)
+- **Current release:** [v1.0.8](https://github.com/jepicaju862-lab/Side-Comments-origin/releases/tag/1.0.8)
 - **Minimum Obsidian version:** 0.15.0
 - **Platforms:** desktop and mobile
 

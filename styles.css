@@ -7,6 +7,15 @@
    0. Design Tokens & Base
    ========================================================================== */
 
+body {
+    --sidenote-highlight-color: rgba(255, 208, 0, 0.2);
+    --sidenote-highlight-hover: rgba(255, 208, 0, 0.4);
+    --sidenote-highlight-border: rgba(255, 208, 0, 0.6);
+    --sidenote-orphaned-color: rgba(255, 80, 80, 0.2);
+    --sidenote-orphaned-hover: rgba(255, 80, 80, 0.3);
+    --sidenote-orphaned-border: rgba(255, 80, 80, 0.6);
+}
+
 .sidenote-view-container,
 .sidenote-comment-item,
 .sidenote-selection-toolbar,
@@ -611,6 +620,11 @@ button.sidenote-menu-button {
     transform-origin: bottom center;
 }
 
+.sidenote-tooltip.is-loading {
+    visibility: hidden;
+    min-height: 0;
+}
+
 .sidenote-reading-tooltip {
     position: fixed;
     z-index: var(--layer-popover, 1000);
@@ -732,6 +746,11 @@ button.sidenote-menu-button {
     visibility: visible;
     opacity: 1;
     box-shadow: var(--sc-shadow-sm);
+}
+
+.sidenote-embedded-image {
+    display: block;
+    max-width: 100%;
 }
 
 .sidenote-tooltip-content.markdown-rendered img,
@@ -1050,6 +1069,18 @@ button.sidenote-color-circle:not(.custom-color) {
     user-select: none;
 }
 
+.sidenote-modal-drag-handle {
+    cursor: grab;
+}
+
+.sidenote-modal-drag-handle.is-dragging {
+    cursor: grabbing;
+}
+
+.sidenote-modal-floating.sidenote-modal-drag-positioned {
+    transform: none;
+}
+
 .sidenote-modal-mark-types {
     display: flex;
     flex-wrap: wrap;
@@ -1194,6 +1225,12 @@ button.sidenote-color-circle:not(.custom-color) {
 
 .sidenote-modal-textarea::placeholder {
     color: var(--text-faint);
+}
+
+.sidenote-notice-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
 }
 
 /* ── 操作栏 ── */

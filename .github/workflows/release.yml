@@ -40,6 +40,9 @@ jobs:
         run: |
           node -e "const manifest=require('./manifest.json'); const tag=process.env.RELEASE_TAG.replace(/^v/, ''); if (manifest.version !== tag) { console.error('Tag version ' + tag + ' does not match manifest version ' + manifest.version); process.exit(1); }"
 
+      - name: Lint plugin source
+        run: npm run lint
+
       - name: Build plugin
         run: npm run build
 

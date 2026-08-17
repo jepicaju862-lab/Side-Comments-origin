@@ -1,4 +1,32 @@
 
+# Side Comments origin v1.0.8 Release Notes
+
+- Release date: August 17, 2026
+- Minimum Obsidian version: 0.15.0
+- Supported platforms: desktop and Obsidian Mobile
+
+## Review Compliance and Compatibility
+
+- Replaced static inline style assignments with CSS classes or Obsidian's
+  `setCssStyles` helper.
+- Replaced the manual settings heading with `Setting.setHeading()`.
+- Removed unsafe `innerHTML` entity decoding and runtime `<style>` injection.
+- Moved default visual variables and loading/dragging states into `styles.css`.
+- Replaced Node.js `crypto`, `require`, and `Buffer` fallbacks with Web Crypto
+  and a browser-compatible fallback for mobile support.
+- Replaced the hardcoded `.obsidian` plugin data path with `Vault.configDir`.
+- Declared CodeMirror packages as direct dependencies and removed the obsolete
+  `builtin-modules` package.
+- Added the official `eslint-plugin-obsidianmd` rules and a release lint gate.
+- Updated the build toolchain; dependency audit now reports zero known
+  vulnerabilities.
+
+This release changes implementation and review compliance only. It does not add
+semantic annotation types or a resolved state, and it does not change the
+stored annotation data format.
+
+---
+
 # Side Comments origin v1.0.5 Release Notes
 
 Release date: August 10, 2026  

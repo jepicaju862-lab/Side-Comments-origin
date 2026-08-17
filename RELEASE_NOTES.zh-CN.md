@@ -1,4 +1,28 @@
 
+# Side Comments origin v1.0.8 发布说明
+
+- 发布日期：2026-08-17
+- 最低 Obsidian 版本：0.15.0
+- 支持平台：桌面端与 Obsidian Mobile
+
+## 审核规范与兼容性修复
+
+- 将静态内联样式迁移为 CSS 类或 Obsidian `setCssStyles` 调用。
+- 使用 `Setting.setHeading()` 替换手动创建的设置标题。
+- 移除不安全的 `innerHTML` 实体解码和运行时 `<style>` 注入。
+- 将默认视觉变量以及加载、拖动状态迁移到 `styles.css`。
+- 移除 Node.js `crypto`、`require` 和 `Buffer` 回退，改用 Web Crypto 与
+  浏览器兼容回退，保持移动端支持。
+- 使用 `Vault.configDir` 替换写死的 `.obsidian` 插件数据路径。
+- 显式声明 CodeMirror 依赖，并移除过时的 `builtin-modules` 包。
+- 接入官方 `eslint-plugin-obsidianmd` 规则和 Release lint 门禁。
+- 更新构建工具链；依赖审计目前报告 0 个已知漏洞。
+
+本版本只调整实现方式与审核兼容性，不增加笔记、疑问、待办、警告等
+语义类型，不增加“已解决”状态，也不改变现有批注数据格式。
+
+---
+
 # Side Comments origin v1.0.5 发布说明
 
 发布日期：2026-08-10  

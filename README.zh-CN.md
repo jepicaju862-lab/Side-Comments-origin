@@ -8,7 +8,7 @@
 可以添加视觉标记和独立的 Markdown 批注，无需向原笔记插入额外语法。
 
 - **官方网站：** [peyote.info](https://peyote.info/)
-- **当前版本：** [v1.0.9](https://github.com/jepicaju862-lab/Side-Comments-origin/releases/tag/1.0.9)
+- **当前版本：** [v1.0.10](https://github.com/jepicaju862-lab/Side-Comments-origin/releases/tag/1.0.10)
 
 
 ## 🌟 功能
@@ -201,6 +201,7 @@
 - 插件设置和旧版迁移状态保存在 `data.json`。
 - 粘贴的图片默认保存在 `side-note-attachments`。
 - 手动创建的 Markdown 备份默认保存在 `side-note-comments`。
+- 仅在你主动粘贴图片或复制批注回链时访问剪贴板；插件不会在后台监控剪贴板。
 - 所有文件夹都位于 vault 内，并可以在设置中修改。
 - 笔记重命名时会同步更新批注引用。
 - 插件代码不会发起网络请求。

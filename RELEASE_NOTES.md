@@ -1,4 +1,35 @@
 
+# Side Comments origin v1.0.10 Release Notes
+
+- Release date: August 17, 2026
+- Minimum Obsidian version: 0.15.0
+- Supported platforms: desktop and Obsidian Mobile
+
+## Release Review Fixes
+
+- Removed four dynamic `<script>` creation paths and the related
+  `new Function()` path inherited from the legacy JSZip scheduling fallbacks
+  bundled by `docx`.
+- Added an exact, fail-closed build transformation that removes only those
+  obsolete Internet Explorer fallbacks. Native timers and `MessageChannel`
+  remain available on supported Obsidian platforms.
+- Added a post-build security gate that rejects any future bundle containing
+  dynamic script creation, `eval()`, or `new Function()`.
+- Verified Word export after the change by generating a DOCX with a native
+  annotation and validating its ZIP signature and annotation count.
+- Updated the release workflow to publish only Obsidian's three supported
+  assets: `main.js`, `manifest.json`, and `styles.css`.
+- Removed the unsupported ZIP archive from the v1.0.9 GitHub Release.
+
+Clipboard access remains limited to explicit user actions: copying an
+annotation backlink or pasting an image into the annotation editor. The plugin
+does not perform clipboard access in the background.
+
+This release does not add semantic annotation types or a resolved state, and it
+does not change the stored annotation data format.
+
+---
+
 # Side Comments origin v1.0.9 Release Notes
 
 - Release date: August 17, 2026

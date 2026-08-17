@@ -1,4 +1,32 @@
 
+# Side Comments origin v1.0.10 发布说明
+
+- 发布日期：2026-08-17
+- 最低 Obsidian 版本：0.15.0
+- 支持平台：桌面端与 Obsidian Mobile
+
+## 发布审核修复
+
+- 移除 `docx` 所捆绑旧版 JSZip 调度兼容层中的 4 条动态 `<script>` 创建路径，
+  以及相关的 `new Function()` 路径。
+- 增加精确且失败即停止的构建转换，只移除这些已过时的 Internet Explorer
+  回退逻辑；受支持的 Obsidian 平台继续使用原生计时器和 `MessageChannel`。
+- 增加构建后安全门禁；如果今后的 bundle 再次包含动态脚本、`eval()` 或
+  `new Function()`，构建会直接失败。
+- 通过生成包含原生批注的 DOCX，并校验 ZIP 签名和批注数量，确认 Word 导出
+  在修改后仍可正常工作。
+- 发布工作流现在只上传 Obsidian 支持的三个资产：`main.js`、`manifest.json`
+  和 `styles.css`。
+- 已从 v1.0.9 GitHub Release 删除不受支持的 ZIP 压缩包。
+
+剪贴板访问仅发生于用户主动复制批注回链或向批注编辑器粘贴图片时，插件不会
+在后台访问剪贴板。
+
+本版本不增加笔记、疑问、待办、警告等语义类型，不增加“已解决”状态，也不改变
+现有批注数据格式。
+
+---
+
 # Side Comments origin v1.0.9 发布说明
 
 - 发布日期：2026-08-17

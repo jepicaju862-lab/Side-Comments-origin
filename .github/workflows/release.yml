@@ -46,19 +46,6 @@ jobs:
       - name: Build plugin
         run: npm run build
 
-      - name: Package release assets
-        id: package
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          test -s main.js
-          test -s manifest.json
-          test -s styles.css
-          archive="side-comments-origin-${RELEASE_TAG}.zip"
-          zip -j "$archive" main.js manifest.json styles.css
-          echo "archive=$archive" >> "$GITHUB_OUTPUT"
-
       - name: Generate build provenance attestations
         uses: actions/attest@v4
         with:
@@ -66,13 +53,11 @@ jobs:
             ${{ github.workspace }}/main.js
             ${{ github.workspace }}/manifest.json
             ${{ github.workspace }}/styles.css
-            ${{ github.workspace }}/${{ steps.package.outputs.archive }}
 
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-          ARCHIVE: ${{ steps.package.outputs.archive }}
         run: |
           set -euo pipefail
           if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -85,4 +70,4 @@ jobs:
           gh release upload "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber \
-            main.js manifest.json styles.css "$ARCHIVE"
+            main.js manifest.json styles.css

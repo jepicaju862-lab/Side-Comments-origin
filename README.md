@@ -8,7 +8,7 @@ Markdown note, apply a visual mark, and attach standalone Markdown comments
 without inserting extra syntax into the original note.
 
 - **Website:** [peyote.info](https://peyote.info/)
-- **Current release:** [v1.0.9](https://github.com/jepicaju862-lab/Side-Comments-origin/releases/tag/1.0.9)
+- **Current release:** [v1.0.10](https://github.com/jepicaju862-lab/Side-Comments-origin/releases/tag/1.0.10)
 - **Minimum Obsidian version:** 0.15.0
 - **Platforms:** desktop and mobile
 
@@ -216,6 +216,9 @@ the original quoted text, annotation content, and structured callouts.
 - Plugin settings and legacy migration state are stored in `data.json`.
 - Pasted images are stored in `side-note-attachments` by default.
 - Manual Markdown backups are stored in `side-note-comments` by default.
+- Clipboard access occurs only when you explicitly paste an image or copy an
+  annotation backlink; the plugin does not monitor the clipboard in the
+  background.
 - All folders are inside the vault and can be changed in Settings.
 - Note renames update their annotation references.
 - The plugin code makes no network requests.

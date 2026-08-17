@@ -1,6 +1,8 @@
 import esbuild from "esbuild";
 import process from "process";
 import { builtinModules } from "node:module";
+import { readFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 const banner =
 	`/*
@@ -10,6 +12,49 @@ if you want to view the source, please visit the github repository of this plugi
 `;
 
 const prod = (process.argv[2] === "production");
+
+/**
+ * docx 8.5.0 bundles two legacy IE scheduling fallbacks from JSZip. They create
+ * temporary script elements and accept string callbacks through new Function().
+ * Obsidian has native timers and MessageChannel, so those unreachable fallbacks
+ * are removed while bundling. Exact match counts make dependency changes fail
+ * the build instead of silently shipping unreviewed compatibility code.
+ */
+const safeDocxCompatibilityPlugin = {
+	name: "safe-docx-compatibility",
+	setup(build) {
+		build.onLoad({ filter: /node_modules[\\/]docx[\\/](?:build|dist)[\\/]index\.mjs$/ }, async (args) => {
+			let contents = await readFile(args.path, "utf8");
+			const replacements = [
+				{
+					name: "Promise scheduler script fallback",
+					pattern: /"document" in ([\w$]+) && "onreadystatechange" in \1\.document\.createElement\("script"\)/g,
+					replacement: "false",
+				},
+				{
+					name: "setImmediate script fallback",
+					pattern: /([\w$]+) && "onreadystatechange" in \1\.createElement\("script"\)/g,
+					replacement: "false",
+				},
+				{
+					name: "setImmediate string callback",
+					pattern: /"function" != typeof ([\w$]+) && \(\1 = new Function\("" \+ \1\)\)/g,
+					replacement: '"function" != typeof $1 && (() => { throw new TypeError("setImmediate callback must be a function"); })()',
+				},
+			];
+
+			for (const replacement of replacements) {
+				const matches = contents.match(replacement.pattern)?.length ?? 0;
+				if (matches !== 1) {
+					throw new Error(`${replacement.name}: expected one match in ${args.path}, found ${matches}`);
+				}
+				contents = contents.replace(replacement.pattern, replacement.replacement);
+			}
+
+			return { contents, loader: "js", resolveDir: dirname(args.path) };
+		});
+	},
+};
 
 const context = await esbuild.context({
 	banner: {
@@ -38,6 +83,7 @@ const context = await esbuild.context({
 	logLevel: "info",
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
+	plugins: [safeDocxCompatibilityPlugin],
 	outfile: "main.js",
 	minify: prod,
 });

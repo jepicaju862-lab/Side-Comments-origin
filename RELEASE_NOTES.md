@@ -1,4 +1,36 @@
 
+# Side Comments origin v1.0.9 Release Notes
+
+- Release date: August 17, 2026
+- Minimum Obsidian version: 0.15.0
+- Supported platforms: desktop and Obsidian Mobile
+
+## Automated Review Cleanup
+
+- Resolved all source-code warnings and recommendations reported against
+  v1.0.8 by the official Obsidian review rules.
+- Added declarative setting definitions for Obsidian 1.13+ settings search
+  while preserving the existing settings interface on older Obsidian releases.
+- Replaced deprecated Markdown rendering, notice, and string APIs with their
+  supported equivalents.
+- Replaced generic DOM creation with Obsidian helpers and made DOM type checks
+  safe across popout windows.
+- Added explicit types for internal Obsidian integration boundaries, editor
+  selections, preview rendering, plugin data, and CodeMirror access.
+- Corrected asynchronous event handling so promises are awaited or explicitly
+  detached, including sidebar rendering, navigation, clipboard, and tooltip
+  work.
+- Standardized timers on `window.setTimeout()` and `window.clearTimeout()` for
+  popout-window compatibility.
+- Removed unused values, unnecessary assertions, an empty catch block, and the
+  obsolete selection-coordinate calculation.
+
+The production build and official lint rules complete with zero errors and zero
+warnings. This release does not add semantic annotation types or a resolved
+state, and it does not change the stored annotation data format.
+
+---
+
 # Side Comments origin v1.0.8 Release Notes
 
 - Release date: August 17, 2026

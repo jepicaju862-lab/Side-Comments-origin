@@ -1,9 +1,9 @@
-﻿import { ItemView, WorkspaceLeaf, TFile, App, MarkdownView, Notice, ViewStateResult, Plugin, Setting, PluginSettingTab, MarkdownRenderer, setIcon, Component, normalizePath, Platform, Editor, Modal } from "obsidian";
+﻿import { ItemView, WorkspaceLeaf, TFile, App, MarkdownView, Notice, ViewStateResult, Plugin, Setting, PluginSettingTab, MarkdownRenderer, setIcon, Component, normalizePath, Platform, Editor } from "obsidian";
 import { Comment, CommentManager } from "./commentManager";
 import { MarkdownPostProcessorContext, MarkdownRenderChild } from "obsidian";
 import { exportNoteToDocx } from "./wordExporter";
 import { EditorView, Decoration, DecorationSet, ViewPlugin, ViewUpdate, hoverTooltip } from "@codemirror/view";
-import { RangeSetBuilder, StateEffect } from "@codemirror/state";
+import { RangeSetBuilder, SelectionRange, StateEffect } from "@codemirror/state";
 import { generateBinaryHash, generateHash } from "./hash";
 
 // --- Helper Functions ---
@@ -30,6 +30,37 @@ interface PluginData extends SideNoteSettings {
     comments?: Comment[];
     imageHashes: Record<string, string>;
 }
+
+interface GlobalSearchPlugin {
+    openGlobalSearch(query: string): void;
+}
+
+interface InternalPlugins {
+    getPluginById(id: string): { instance?: GlobalSearchPlugin } | undefined;
+}
+
+type AppWithInternalPlugins = App & { internalPlugins: InternalPlugins };
+
+interface SettingsController {
+    open(): void;
+    openTabById?(id: string): void;
+}
+
+type AppWithSettings = App & { setting?: SettingsController };
+
+interface PreviewSectionState {
+    rendered?: boolean;
+}
+
+interface PreviewModeState {
+    rerender(force: boolean): void;
+    renderer?: {
+        sections?: PreviewSectionState[];
+        onRender?(): void;
+    };
+}
+
+type EditorWithCodeMirror = Editor & { cm?: EditorView };
 
 interface TableCellRange {
     start: number;
@@ -106,6 +137,7 @@ const COLOR_PRESETS = [
 ] as const;
 
 const ACTIVE_COMMENT_MODAL_KEY = '__sidenoteActiveCommentModal';
+type SideNoteWindow = Window & { [ACTIVE_COMMENT_MODAL_KEY]?: CommentModal };
 
 function getMarkTypeOption(markType?: Comment['markType']) {
     return MARK_TYPE_OPTIONS.find(option => option.value === (markType || "highlight")) || MARK_TYPE_OPTIONS[0];
@@ -132,7 +164,7 @@ class SideNoteView extends ItemView {
     }
 
     getViewType() { return "sidenote-view"; }
-    getDisplayText() { return "Side Note"; }
+    getDisplayText() { return "Side note"; }
     getIcon() { return "message-square"; }
 
     async onOpen() {
@@ -196,7 +228,7 @@ class SideNoteView extends ItemView {
         };
 
         const buttonRect = button.getBoundingClientRect();
-        const statusBar = document.querySelector('.status-bar') as HTMLElement | null;
+        const statusBar = document.querySelector('.status-bar');
         const statusBarRect = statusBar?.getBoundingClientRect();
         const safeBottom = statusBarRect && statusBarRect.height > 0
             ? Math.min(window.innerHeight - 8, statusBarRect.top - 8)
@@ -236,7 +268,7 @@ class SideNoteView extends ItemView {
         this.activeCommentTimestamp = timestamp;
         this.renderView();
         
-        setTimeout(() => {
+        window.setTimeout(() => {
             const commentEl = this.containerEl.querySelector(`[data-comment-timestamp="${timestamp}"]`);
             if (commentEl) {
                 // 修改点 1：改为 'nearest'，避免强制跳到中间
@@ -269,7 +301,7 @@ class SideNoteView extends ItemView {
         searchInput.oninput = (e) => {
             const target = e.target as HTMLInputElement;
             this.searchQuery = target.value.toLowerCase();
-            this.renderCommentsList(commentsContainer);
+            void this.renderCommentsList(commentsContainer);
         };
 
         const exportBtn = toolbar.createEl("button", { cls: "clickable-icon" });
@@ -286,7 +318,7 @@ class SideNoteView extends ItemView {
             await this.plugin.saveData();
             setIcon(sortBtn, this.plugin.settings.commentSortOrder === "position" ? "arrow-down-narrow-wide" : "clock");
             sortBtn.setAttribute("aria-label", this.plugin.settings.commentSortOrder === "position" ? "改为按创建时间排序" : "改为按正文位置排序");
-            this.renderCommentsList(commentsContainer);
+            await this.renderCommentsList(commentsContainer);
         };
 
         const collapseBtn = toolbar.createEl("button", { cls: "clickable-icon" });
@@ -302,12 +334,12 @@ class SideNoteView extends ItemView {
 
         const commentsContainer = this.containerEl.createDiv("sidenote-comments-list-wrapper");
 
-        this.renderCommentsList(commentsContainer);
+        void this.renderCommentsList(commentsContainer);
 
         // 修改点 3：渲染后恢复滚动位置
         if (this.lastScrollTop > 0) {
             // 使用 setTimeout 确保 DOM 渲染完成
-            setTimeout(() => {
+            window.setTimeout(() => {
                 commentsContainer.scrollTop = this.lastScrollTop;
             }, 0);
         }
@@ -339,10 +371,10 @@ class SideNoteView extends ItemView {
             const file = await this.app.vault.create(filename, content);
             await this.app.workspace.getLeaf(true).openFile(file);
             new Notice(`Exported to ${filename}`);
-        } catch (error) { new Notice("Error exporting file."); }
+        } catch { new Notice("Error exporting file."); }
     }
 
-    public renderCommentsList(container: HTMLElement) {
+    public async renderCommentsList(container: HTMLElement) {
         this.closeActionMenu();
         container.empty();
         
@@ -372,7 +404,7 @@ class SideNoteView extends ItemView {
         if (commentsForFile.length > 0) {
             const listEl = container.createDiv("sidenote-comments-container");
             
-            commentsForFile.forEach(async (comment) => {
+            for (const comment of commentsForFile) {
                 const commentEl = listEl.createDiv("sidenote-comment-item");
                 commentEl.setAttribute("data-comment-timestamp", comment.timestamp.toString());
                 commentEl.tabIndex = 0;
@@ -460,14 +492,16 @@ class SideNoteView extends ItemView {
                 copyOption.onclick = (e) => {
                     e.stopPropagation();
                     this.closeActionMenu();
-                    this.plugin.copyBacklink(comment);
+                    void this.plugin.copyBacklink(comment);
                 };
 
                 const searchOption = menuContainer.createEl("button", { text: "在库中搜索", cls: "sidenote-menu-option" });
                 searchOption.onclick = (e) => {
                     e.stopPropagation();
                     this.closeActionMenu();
-                    (this.app as any).internalPlugins.getPluginById('global-search').instance.openGlobalSearch(comment.selectedText);
+                    const searchPlugin = (this.app as AppWithInternalPlugins).internalPlugins
+                        .getPluginById('global-search')?.instance;
+                    searchPlugin?.openGlobalSearch(comment.selectedText);
                 };
 
                 const deleteOption = menuContainer.createEl("button", { text: "删除批注", cls: "sidenote-menu-option sidenote-menu-delete" });
@@ -481,7 +515,7 @@ class SideNoteView extends ItemView {
                     e.stopPropagation();
                     this.openActionMenu(menuContainer, menuButton);
                 };
-            });
+            }
         } else {
             const emptyStateEl = container.createDiv("sidenote-empty-state");
             emptyStateEl.createEl("p", { text: this.searchQuery ? "没有匹配的批注。" : "当前笔记还没有批注。" });
@@ -489,7 +523,7 @@ class SideNoteView extends ItemView {
     }
     
     private setupExpandableText(el: HTMLElement) {
-        setTimeout(() => {
+        window.setTimeout(() => {
             if (el.scrollHeight > el.clientHeight + 2) {
                 el.addClass('is-truncated');
                 el.onclick = (e) => {
@@ -534,7 +568,7 @@ class SideNoteView extends ItemView {
                this.app.workspace.leftSplit?.collapse();
                // @ts-ignore
                this.app.workspace.rightSplit?.collapse();
-               await new Promise(resolve => setTimeout(resolve, 350));
+               await new Promise(resolve => window.setTimeout(resolve, 350));
            }
 
             const editor = targetLeaf.view.editor;
@@ -553,7 +587,7 @@ class SideNoteView extends ItemView {
                 await new Promise(resolve => window.requestAnimationFrame(resolve));
                 const readingHighlight = targetLeaf.view.containerEl.querySelector(
                     `.sidenote-reading-highlight[data-comment-timestamp="${updatedComment.timestamp}"]`
-                ) as HTMLElement | null;
+                );
                 if (readingHighlight) {
                     readingHighlight.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
                     readingHighlight.addClass('sidenote-jump-target');
@@ -591,14 +625,15 @@ class CommentModal {
     private static activeModal: CommentModal | null = null;
 
     static closeActive() {
-        const globalActive = (window as any)[ACTIVE_COMMENT_MODAL_KEY] as CommentModal | undefined;
+        const sideNoteWindow = window as SideNoteWindow;
+        const globalActive = sideNoteWindow[ACTIVE_COMMENT_MODAL_KEY];
         globalActive?.close?.();
         if (CommentModal.activeModal && CommentModal.activeModal !== globalActive) {
             CommentModal.activeModal.close();
         }
         document.querySelectorAll('.sidenote-modal-floating').forEach(element => element.remove());
         CommentModal.activeModal = null;
-        delete (window as any)[ACTIVE_COMMENT_MODAL_KEY];
+        delete sideNoteWindow[ACTIVE_COMMENT_MODAL_KEY];
     }
 
     app: App;
@@ -651,7 +686,8 @@ class CommentModal {
 
     open() {
         this.close();
-        const globalActive = (window as any)[ACTIVE_COMMENT_MODAL_KEY] as CommentModal | undefined;
+        const sideNoteWindow = window as SideNoteWindow;
+        const globalActive = sideNoteWindow[ACTIVE_COMMENT_MODAL_KEY];
         if (globalActive && globalActive !== this) globalActive.close?.();
         if (CommentModal.activeModal && CommentModal.activeModal !== this && CommentModal.activeModal !== globalActive) {
             CommentModal.activeModal.close();
@@ -660,7 +696,7 @@ class CommentModal {
         // reference above handles current builds; this DOM guard also heals existing sessions.
         document.querySelectorAll('.sidenote-modal-floating').forEach(element => element.remove());
         CommentModal.activeModal = this;
-        (window as any)[ACTIVE_COMMENT_MODAL_KEY] = this;
+        sideNoteWindow[ACTIVE_COMMENT_MODAL_KEY] = this;
         this.previousFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
         // 创建浮动容器，直接挂到 document.body，无任何遮罩
@@ -743,11 +779,11 @@ class CommentModal {
             this.commentText = (e.target as HTMLTextAreaElement).value;
             autoResize();
         };
-        textarea.addEventListener('paste', this.handlePaste.bind(this));
+        textarea.addEventListener('paste', (event) => { void this.handlePaste(event); });
         textarea.addEventListener('keydown', (e: KeyboardEvent) => {
             if (!e.isComposing && (e.metaKey || e.ctrlKey) && e.key === 'Enter') {
                 e.preventDefault();
-                this.submitForm();
+                void this.submitForm();
             }
         });
 
@@ -765,13 +801,13 @@ class CommentModal {
             activeCircle = circle;
         };
 
-        const colorPicker = document.createElement('input');
+        const colorPicker = createEl('input');
         colorPicker.type = 'color';
         colorPicker.className = 'sidenote-toolbar-color-picker';
         colorPicker.value = this.colorInput;
 
         COLOR_PRESETS.forEach(color => {
-            const circle = document.createElement('button');
+            const circle = createEl('button');
             circle.type = 'button';
             circle.className = 'sidenote-color-circle';
             circle.style.setProperty('--circle-color', color.value);
@@ -787,7 +823,7 @@ class CommentModal {
             colorsWrapper.appendChild(circle);
         });
 
-        const customColorWrapper = document.createElement('label');
+        const customColorWrapper = createEl('label');
         customColorWrapper.className = 'sidenote-color-circle custom-color';
         customColorWrapper.title = '自定义颜色';
         customColorWrapper.setAttribute('aria-label', '自定义颜色');
@@ -822,7 +858,9 @@ class CommentModal {
             copyBtn.type = 'button';
             copyBtn.setAttribute('aria-label', '复制回链');
             setIcon(copyBtn, 'copy');
-            copyBtn.onclick = () => this.plugin.copyBacklink(this.comment!);
+            copyBtn.onclick = () => {
+                if (this.comment) void this.plugin.copyBacklink(this.comment);
+            };
 
             const deleteBtn = actionsWrapper.createEl('button', { cls: 'sidenote-icon-btn sidenote-btn-danger', title: '删除批注' });
             deleteBtn.type = 'button';
@@ -841,7 +879,7 @@ class CommentModal {
             cls: 'sidenote-update-btn'
         });
         submitBtn.type = 'button';
-        submitBtn.onclick = () => this.submitForm();
+        submitBtn.onclick = () => { void this.submitForm(); };
 
         // 拖拽支持：拖动顶部栏移动窗口
         this.makeDraggable(floating, topBar);
@@ -852,7 +890,7 @@ class CommentModal {
         };
         document.addEventListener('keydown', this._keydownHandler);
 
-        setTimeout(() => {
+        window.setTimeout(() => {
             textarea.focus();
             if (this.commentText) autoResize();
         }, 50);
@@ -869,8 +907,9 @@ class CommentModal {
         this.previousFocusEl = null;
         this.isSubmitting = false;
         if (CommentModal.activeModal === this) CommentModal.activeModal = null;
-        if ((window as any)[ACTIVE_COMMENT_MODAL_KEY] === this) {
-            delete (window as any)[ACTIVE_COMMENT_MODAL_KEY];
+        const sideNoteWindow = window as SideNoteWindow;
+        if (sideNoteWindow[ACTIVE_COMMENT_MODAL_KEY] === this) {
+            delete sideNoteWindow[ACTIVE_COMMENT_MODAL_KEY];
         }
         this.plugin.hideSelectionToolbars();
         if (previousFocus?.isConnected) window.requestAnimationFrame(() => previousFocus.focus());
@@ -1011,7 +1050,7 @@ class CommentModal {
              // @ts-ignore
             return await this.app.fileManager.getAvailablePathForAttachment(fileName, folderPath);
         });
-        return fileOrPath instanceof TFile ? fileOrPath.path : (fileOrPath as string);
+        return fileOrPath instanceof TFile ? fileOrPath.path : (fileOrPath);
     }
 }
 
@@ -1020,6 +1059,142 @@ class CommentModal {
 class SideNoteSettingTab extends PluginSettingTab {
     plugin: SideNote;
     constructor(app: App, plugin: SideNote) { super(app, plugin); }
+
+    /**
+     * Obsidian 1.13+ uses these definitions for rendering and settings search.
+     * Older releases ignore this method and continue to use display().
+     */
+    getSettingDefinitions() {
+        const orphanedCount = this.plugin.commentManager.getOrphanedCommentCount();
+        return [
+            {
+                name: "批注排序",
+                desc: "选择侧栏中批注的排列方式。",
+                render: (setting: Setting) => setting.addDropdown((dropdown) => dropdown
+                    .addOption("timestamp", "按创建时间")
+                    .addOption("position", "按正文位置")
+                    .setValue(this.plugin.settings.commentSortOrder)
+                    .onChange(async (value: "timestamp" | "position") => {
+                        this.plugin.settings.commentSortOrder = value;
+                        await this.plugin.saveData();
+                        this.plugin.refreshViews();
+                    }))
+            },
+            {
+                name: "显示批注标记",
+                desc: "在编辑视图和阅读视图中显示批注的视觉标记。",
+                render: (setting: Setting) => setting.addToggle((toggle) => toggle
+                    .setValue(this.plugin.settings.showHighlights)
+                    .onChange(async (value: boolean) => {
+                        this.plugin.settings.showHighlights = value;
+                        await this.plugin.saveData();
+                        this.plugin.refreshEditorDecorations();
+                    }))
+            },
+            {
+                name: "启用选区工具栏",
+                desc: "选中文字后显示快速批注工具栏。",
+                render: (setting: Setting) => setting.addToggle((toggle) => toggle
+                    .setValue(this.plugin.settings.enableSelectionToolbar)
+                    .onChange(async (value: boolean) => {
+                        this.plugin.settings.enableSelectionToolbar = value;
+                        await this.plugin.saveData();
+                    }))
+            },
+            {
+                name: "快捷键设置",
+                desc: "加粗、高亮、批注、下划线都已注册为 Obsidian 命令，可在 Obsidian 快捷键设置中自定义绑定。",
+                render: (setting: Setting) => setting.setHeading()
+            },
+            ...SHORTCUT_COMMANDS.map((command) => ({
+                name: command.label,
+                desc: `打开 Obsidian 快捷键设置并搜索：${command.commandName}`,
+                render: (setting: Setting) => setting.addButton((button) => button
+                    .setButtonText("设置快捷键")
+                    .onClick(() => this.plugin.openHotkeySettings(command.commandName)))
+            })),
+            {
+                name: "新批注默认颜色",
+                desc: "仅影响之后创建的批注。",
+                render: (setting: Setting) => setting.addColorPicker((colorPicker) => colorPicker
+                    .setValue(this.plugin.settings.highlightColor || "#FFC800")
+                    .onChange(async (value: string) => {
+                        this.plugin.settings.highlightColor = value;
+                        await this.plugin.saveData();
+                        this.plugin.applyHighlightColor();
+                    }))
+            },
+            {
+                name: "标记透明度",
+                render: (setting: Setting) => setting.addSlider((slider) => slider
+                    .setLimits(0, 1, 0.1)
+                    .setValue(this.plugin.settings.highlightOpacity ?? 0.2)
+                    .onChange(async (value: number) => {
+                        this.plugin.settings.highlightOpacity = value;
+                        await this.plugin.saveData();
+                        this.plugin.applyHighlightColor();
+                    }))
+            },
+            {
+                name: "Markdown 批注备份文件夹",
+                render: (setting: Setting) => setting.addText((text) => text
+                    .setPlaceholder("Side-note-comments")
+                    .setValue(this.plugin.settings.markdownFolder || "")
+                    .onChange(async (value) => {
+                        this.plugin.settings.markdownFolder = value.trim() || "side-note-comments";
+                        await this.plugin.saveData();
+                    }))
+            },
+            {
+                name: "批注附件文件夹",
+                render: (setting: Setting) => setting.addText((text) => text
+                    .setPlaceholder("Side-note-attachments")
+                    .setValue(this.plugin.settings.attachmentFolder || "")
+                    .onChange(async (value) => {
+                        this.plugin.settings.attachmentFolder = value.trim() || "side-note-attachments";
+                        await this.plugin.saveData();
+                    }))
+            },
+            {
+                name: "批注数据文件夹",
+                desc: "按笔记保存批注数据；修改后请重新加载插件。",
+                render: (setting: Setting) => setting.addText((text) => text
+                    .setPlaceholder("Side-note-data")
+                    .setValue(this.plugin.settings.commentsDataFolder || "")
+                    .onChange(async (value) => {
+                        this.plugin.settings.commentsDataFolder = value.trim() || "side-note-data";
+                        await this.plugin.saveData();
+                    }))
+            },
+            {
+                name: "创建 Markdown 备份",
+                render: (setting: Setting) => setting.addButton((button) => button
+                    .setButtonText("创建备份")
+                    .onClick(async () => {
+                        await this.plugin.migrateInlineCommentsToMarkdown();
+                        new Notice("Markdown 备份已创建");
+                    }))
+            },
+            {
+                name: "孤立批注",
+                desc: `当前有 ${orphanedCount} 条孤立批注。`
+            },
+            {
+                name: "删除孤立批注",
+                render: (setting: Setting) => setting.addButton((button) => button
+                    .setButtonText(`删除 ${orphanedCount} 条孤立批注`)
+                    .setWarning()
+                    .setDisabled(orphanedCount === 0)
+                    .onClick(async () => {
+                        const deleted = this.plugin.commentManager.deleteOrphanedComments();
+                        await this.plugin.saveData();
+                        this.plugin.refreshViews();
+                        new Notice(`已删除 ${deleted} 条孤立批注`);
+                        (this as unknown as PluginSettingTab & { update(): void }).update();
+                    }))
+            }
+        ];
+    }
 
     display(): void {
         const { containerEl } = this;
@@ -1067,17 +1242,17 @@ class SideNoteSettingTab extends PluginSettingTab {
                     this.plugin.applyHighlightColor();
                 }));
         new Setting(containerEl).setName("Markdown 批注备份文件夹").addText((text) =>
-                text.setPlaceholder("side-note-comments").setValue(this.plugin.settings.markdownFolder || "").onChange(async (value) => {
+                text.setPlaceholder("Side-note-comments").setValue(this.plugin.settings.markdownFolder || "").onChange(async (value) => {
                     this.plugin.settings.markdownFolder = value.trim() || "side-note-comments";
                     await this.plugin.saveData();
                 }));
         new Setting(containerEl).setName("批注附件文件夹").addText((text) =>
-                text.setPlaceholder("side-note-attachments").setValue(this.plugin.settings.attachmentFolder || "").onChange(async (value) => {
+                text.setPlaceholder("Side-note-attachments").setValue(this.plugin.settings.attachmentFolder || "").onChange(async (value) => {
                     this.plugin.settings.attachmentFolder = value.trim() || "side-note-attachments";
                     await this.plugin.saveData();
                 }));
         new Setting(containerEl).setName("批注数据文件夹").setDesc("按笔记保存批注数据；修改后请重新加载插件。") .addText((text) =>
-                text.setPlaceholder("side-note-data").setValue(this.plugin.settings.commentsDataFolder || "").onChange(async (value) => {
+                text.setPlaceholder("Side-note-data").setValue(this.plugin.settings.commentsDataFolder || "").onChange(async (value) => {
                     this.plugin.settings.commentsDataFolder = value.trim() || "side-note-data";
                     await this.plugin.saveData();
                 }));
@@ -1106,7 +1281,7 @@ export default class SideNote extends Plugin {
     settings: SideNoteSettings;
     comments: Comment[] = [];
     imageHashes: Record<string, string> = {};
-    private orphanNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+    private orphanNoticeTimer: number | null = null;
     private pendingOrphans: Comment[] = [];
     private isSaving: boolean = false;
     private editorViews: Set<EditorView> = new Set();
@@ -1147,7 +1322,7 @@ export default class SideNote extends Plugin {
             const overlaySelector = '.modal-container, .menu, .popover, .suggestion-container, .prompt';
             const overlayAdded = mutations.some(mutation =>
                 Array.from(mutation.addedNodes).some(node =>
-                    node instanceof HTMLElement &&
+                    node.instanceOf(HTMLElement) &&
                     (node.matches(overlaySelector) || Boolean(node.querySelector(overlaySelector)))
                 )
             );
@@ -1164,7 +1339,7 @@ export default class SideNote extends Plugin {
     public async renderCommentContent(markdown: string, container: HTMLElement, sourcePath: string) {
         const component = new Component();
         component.load();
-        await MarkdownRenderer.renderMarkdown(markdown, container, sourcePath, component);
+        await MarkdownRenderer.render(this.app, markdown, container, sourcePath, component);
         container.addEventListener("click", (e) => {
             const target = e.target as HTMLElement;
             const link = target.closest("a");
@@ -1175,7 +1350,7 @@ export default class SideNote extends Plugin {
                     const href = link.getAttribute("data-href");
                     if (href) {
                         const newLeaf = e.metaKey || e.ctrlKey;
-                        this.app.workspace.openLinkText(href, sourcePath, newLeaf);
+                        void this.app.workspace.openLinkText(href, sourcePath, newLeaf);
                     }
                 }
             }
@@ -1190,9 +1365,9 @@ export default class SideNote extends Plugin {
                 let textNode;
                 while ((textNode = walker.nextNode())) {
                     if (textNode.textContent?.includes(match[0])) {
-                        const embedSpan = document.createElement('span');
+                        const embedSpan = createSpan();
                         embedSpan.className = 'internal-embed';
-                        const img = document.createElement('img');
+                        const img = createEl('img');
                         img.src = this.app.vault.getResourcePath(file);
                         img.alt = file.basename;
                         img.classList.add('sidenote-embedded-image');
@@ -1210,7 +1385,7 @@ export default class SideNote extends Plugin {
             }
         }
         container.querySelectorAll('.internal-embed').forEach((embed) => {
-            if (embed instanceof HTMLElement && !embed.querySelector('img')) {
+            if (embed.instanceOf(HTMLElement) && !embed.querySelector('img')) {
                 const src = embed.getAttribute('src') || embed.getAttribute('alt') || embed.textContent?.replace(/^\[\[|\]\]$/g, '');
                  if (src) {
                     const file = this.app.metadataCache.getFirstLinkpathDest(src, sourcePath);
@@ -1350,7 +1525,7 @@ export default class SideNote extends Plugin {
             .replace(/```[^\n]*\n?/g, "")
             .replace(/<[^>]+>/g, "")
             .replace(/(?:\*\*|__|~~|==|`+)/g, "")
-            .replace(/\\([\\`*{}\[\]()#+\-.!_>])/g, "$1");
+            .replace(/\\([\\`*{}[\]()#+\-.!_>])/g, "$1");
         return this.decodeHtmlEntities(stripped);
     }
 
@@ -1464,10 +1639,10 @@ export default class SideNote extends Plugin {
             const text = node.nodeValue || "";
             const localStart = sliceStart - nodeStart;
             const localEnd = sliceEnd - nodeStart;
-            const fragment = document.createDocumentFragment();
+            const fragment = createFragment();
             if (localStart > 0) fragment.appendChild(document.createTextNode(text.slice(0, localStart)));
 
-            const span = document.createElement("span");
+            const span = createSpan();
             span.className = className;
             span.setAttribute("data-comment-timestamp", comment.timestamp.toString());
             span.setAttribute("aria-label", comment.comment ? `批注：${comment.comment}` : "批注标记");
@@ -1529,14 +1704,14 @@ export default class SideNote extends Plugin {
         this.app.workspace.iterateAllLeaves((leaf) => {
             if (!(leaf.view instanceof MarkdownView) || leaf.view.getMode() !== "preview") return;
 
-            const previewMode = leaf.view.previewMode as any;
+            const previewMode = leaf.view.previewMode as unknown as PreviewModeState;
             previewMode.rerender(true);
             const nudgePendingRenderer = () => {
                 const renderer = previewMode.renderer;
-                const hasPendingSection = renderer?.sections?.some((section: any) => !section.rendered);
+                const hasPendingSection = renderer?.sections?.some((section) => !section.rendered);
                 // During a plugin hot reload Obsidian can retain a stale queued render.
                 // Only nudge the existing renderer when its sections are still pending.
-                if (hasPendingSection) renderer.onRender?.();
+                if (hasPendingSection) renderer?.onRender?.();
             };
             [50, 250, 750].forEach((delay) => {
                 const timer = window.setTimeout(nudgePendingRenderer, delay);
@@ -1594,7 +1769,7 @@ export default class SideNote extends Plugin {
         if (!comment.comment?.trim()) return;
         this.hideReadingTooltip();
 
-        const tooltip = document.createElement("div");
+        const tooltip = createDiv();
         tooltip.className = "sidenote-tooltip sidenote-reading-tooltip";
         tooltip.setAttribute("role", "tooltip");
         tooltip.classList.add("is-loading");
@@ -1643,7 +1818,7 @@ export default class SideNote extends Plugin {
         this.readingTooltipComponent = component;
         document.body.appendChild(tooltip);
 
-        await MarkdownRenderer.renderMarkdown(comment.comment, content, comment.filePath, component);
+        await MarkdownRenderer.render(this.app, comment.comment, content, comment.filePath, component);
         if (this.readingTooltipEl !== tooltip || !anchor.isConnected) {
             component.unload();
             tooltip.remove();
@@ -1713,7 +1888,7 @@ export default class SideNote extends Plugin {
     }
 
     public openHotkeySettings(searchText: string) {
-        const setting = (this.app as any).setting;
+        const setting = (this.app as AppWithSettings).setting;
         if (!setting?.open) {
             new Notice(`请在 Obsidian 设置 → 快捷键 中搜索“${searchText}”并绑定快捷键。`);
             return;
@@ -1723,12 +1898,12 @@ export default class SideNote extends Plugin {
         setting.openTabById?.("hotkeys");
 
         window.setTimeout(() => {
-            const searchInput = document.querySelector(
+            const searchInput = document.querySelector<HTMLInputElement>(
                 ".modal.mod-settings input[type='search'], " +
                 ".modal.mod-settings input[placeholder*='Search'], " +
                 ".modal.mod-settings input[placeholder*='搜索'], " +
                 ".modal.mod-settings input"
-            ) as HTMLInputElement | null;
+            );
 
             if (!searchInput) {
                 new Notice(`请搜索“${searchText}”并绑定快捷键。`);
@@ -1748,12 +1923,12 @@ export default class SideNote extends Plugin {
             if (!(leaf.view instanceof MarkdownView) || !leaf.view.file) return;
 
             const editor = leaf.view.editor;
-            if (editor && (editor as any).cm === view) {
+            if ((editor as EditorWithCodeMirror).cm === view) {
                 containingFilePath = leaf.view.file.path;
                 return false;
             }
 
-            const containerEl = (leaf.view as any).containerEl as HTMLElement | undefined;
+            const containerEl = leaf.view.containerEl;
             if (!containingFilePath && containerEl?.contains(view.dom)) {
                 containingFilePath = leaf.view.file.path;
             }
@@ -2060,7 +2235,7 @@ export default class SideNote extends Plugin {
 
         this.app.workspace.iterateAllLeaves((leaf) => {
             if (!(leaf.view instanceof MarkdownView) || leaf.view.file?.path !== filePath) return;
-            const cm = (leaf.view.editor as any).cm as EditorView | undefined;
+            const cm = (leaf.view.editor as EditorWithCodeMirror).cm;
             const widgets = Array.from(cm?.dom.querySelectorAll(".cm-table-widget") || []);
             const index = widgets.indexOf(widget);
             if (index !== -1) {
@@ -2156,13 +2331,13 @@ export default class SideNote extends Plugin {
             const before = text.slice(0, localStart);
             const middle = text.slice(localStart, localEnd);
             const after = text.slice(localEnd);
-            const span = document.createElement("span");
+            const span = createSpan();
             span.className = presentation.className;
             span.setAttribute("data-comment-timestamp", comment.timestamp.toString());
             if (presentation.style) span.setAttribute("style", presentation.style);
             span.textContent = middle;
 
-            const fragment = document.createDocumentFragment();
+            const fragment = createFragment();
             if (before) fragment.appendChild(document.createTextNode(before));
             fragment.appendChild(span);
             if (after) fragment.appendChild(document.createTextNode(after));
@@ -2177,7 +2352,7 @@ export default class SideNote extends Plugin {
 
         const docText = view.state.doc.toString();
         const blocks = this.getMarkdownTableBlocks(docText);
-        const widgets = Array.from(view.dom.querySelectorAll(".cm-table-widget")) as HTMLElement[];
+        const widgets = Array.from(view.dom.querySelectorAll<HTMLElement>(".cm-table-widget"));
         widgets.forEach(widget => this.unwrapRenderedTableHighlights(widget));
         if (blocks.length === 0 || widgets.length === 0) return;
 
@@ -2233,14 +2408,14 @@ export default class SideNote extends Plugin {
         this.editorViews.forEach((view) => {
             try {
                 this.applyRenderedTableHighlights(view);
-            } catch (e) {
+            } catch {
                 this.editorViews.delete(view);
             }
         });
 
         this.app.workspace.iterateAllLeaves((leaf) => {
             if (leaf.view instanceof MarkdownView) {
-                const cm = (leaf.view.editor as any).cm as EditorView | undefined;
+                const cm = (leaf.view.editor as EditorWithCodeMirror).cm;
                 if (cm) this.applyRenderedTableHighlights(cm);
             }
         });
@@ -2279,7 +2454,7 @@ export default class SideNote extends Plugin {
     }
 
     private async writeCommentToMarkdown(notePath: string, excerpt: string, body: string, timestamp: number): Promise<string> {
-        const folder = await this.ensureCommentFolder();
+        await this.ensureCommentFolder();
         const filePath = this.getSideNoteFilePath(notePath);
         const block = this.buildMarkdownBlock(excerpt, body, timestamp);
         const existing = this.app.vault.getAbstractFileByPath(filePath);
@@ -2385,17 +2560,17 @@ export default class SideNote extends Plugin {
 
     private showOrphanDeletionNotice(orphans: Comment[]) {
         if (orphans.length === 0) return;
-        const fragment = document.createDocumentFragment();
-        const span = document.createElement('span');
+        const fragment = createFragment();
+        const span = createSpan();
         span.textContent = `${orphans.length} 条批注已失去原文，是否删除？`;
         fragment.appendChild(span);
-        fragment.appendChild(document.createElement('br'));
-        const btnContainer = document.createElement('div');
+        fragment.appendChild(createEl('br'));
+        const btnContainer = createDiv();
         btnContainer.className = 'sidenote-notice-actions';
-        const deleteBtn = document.createElement('button');
+        const deleteBtn = createEl('button');
         deleteBtn.textContent = '删除';
         deleteBtn.className = 'mod-warning';
-        const keepBtn = document.createElement('button');
+        const keepBtn = createEl('button');
         keepBtn.textContent = '保留';
         btnContainer.appendChild(deleteBtn);
         btnContainer.appendChild(keepBtn);
@@ -2468,11 +2643,6 @@ export default class SideNote extends Plugin {
                 return;
             }
             
-            // @ts-ignore
-            const cm = (editor as any).cm; 
-            // @ts-ignore
-            const coords = cm.coordsAtPos(editor.posToOffset(editor.getCursor("to")));
-
             if (skipModal) {
                 const selectedTextHash = await generateHash(selection);
                 const newComment: Comment = {
@@ -2554,7 +2724,7 @@ export default class SideNote extends Plugin {
                         const newLeaves = this.app.workspace.getLeavesOfType("sidenote-view");
                         if (newLeaves.length > 0) sideNoteView = newLeaves[0].view as SideNoteView;
                     }
-                    if (sideNoteView) sideNoteView.jumpToComment(comment);
+                    if (sideNoteView) void sideNoteView.jumpToComment(comment);
                 }
             }
         });
@@ -2583,7 +2753,7 @@ export default class SideNote extends Plugin {
             editorCallback: async (editor, view) => this.handleAddComment(editor, view, 'highlight', undefined, false)
         });
         this.addCommand({
-            id: "export-note-to-word", name: "导出当前笔记为 Word (含批注)", icon: "file-down",
+            id: "export-note-to-word", name: "导出当前笔记为 word (含批注)", icon: "file-down",
             checkCallback: (checking) => {
                 const file = this.app.workspace.getActiveFile();
                 const canRun = !!(file && file.extension === "md");
@@ -2611,11 +2781,11 @@ export default class SideNote extends Plugin {
                 });
             }
             menu.addItem((item) => {
-                item.setTitle("导出为 Word (含批注)").setIcon("file-down").onClick(() => void this.exportActiveNoteToWord(view.file ?? undefined));
+                item.setTitle("导出为 word (含批注)").setIcon("file-down").onClick(() => void this.exportActiveNoteToWord(view.file ?? undefined));
             });
         }));
 
-        this.addRibbonIcon("message-square", "Side Note: Open in Sidebar", () => this.activateView());
+        this.addRibbonIcon("message-square", "Side note: Open in sidebar", () => { void this.activateView(); });
         this.registerEvent(this.app.workspace.on('active-leaf-change', (leaf) => {
             if (leaf && leaf.view instanceof MarkdownView) {
                 const file = leaf.view.file;
@@ -2669,8 +2839,8 @@ export default class SideNote extends Plugin {
                         .filter(c => c.isOrphaned && !beforeOrphanTimestamps.has(c.timestamp));
                     if (newOrphans.length > 0) {
                         this.pendingOrphans.push(...newOrphans);
-                        if (this.orphanNoticeTimer) clearTimeout(this.orphanNoticeTimer);
-                        this.orphanNoticeTimer = setTimeout(() => {
+                        if (this.orphanNoticeTimer) window.clearTimeout(this.orphanNoticeTimer);
+                        this.orphanNoticeTimer = window.setTimeout(() => {
                             const uniqueOrphans = [...new Map(this.pendingOrphans.map(o => [o.timestamp, o])).values()];
                             this.showOrphanDeletionNotice(uniqueOrphans);
                             this.pendingOrphans = [];
@@ -2709,7 +2879,7 @@ export default class SideNote extends Plugin {
             if (rightLeaf) { leaf = rightLeaf; await leaf.setViewState({ type: "sidenote-view", active: true }); }
         }
         if (leaf) {
-            workspace.revealLeaf(leaf);
+            await workspace.revealLeaf(leaf);
             if (leaf.view instanceof SideNoteView) {
                 const activeFile = targetFile || workspace.getActiveFile();
                 leaf.view.updateActiveFile(activeFile);
@@ -2744,8 +2914,8 @@ export default class SideNote extends Plugin {
         this.refreshEditorDecorations();
 
         const notice = new Notice('', 7000);
-        notice.noticeEl.empty();
-        const row = notice.noticeEl.createDiv('sidenote-undo-notice');
+        notice.messageEl.empty();
+        const row = notice.messageEl.createDiv('sidenote-undo-notice');
         row.createSpan({ text: '批注已删除' });
         const undoButton = row.createEl('button', { text: '撤销' });
         undoButton.onclick = async () => {
@@ -2771,7 +2941,7 @@ export default class SideNote extends Plugin {
                         `> \n` +
                         `> **批注**：\n` +
                         `${quoteText(comment.comment || "（无）", "> ")}`;
-        navigator.clipboard.writeText(callout);
+        await navigator.clipboard.writeText(callout);
         new Notice("已复制精确回链 (无污染防漂移)");
     }
 
@@ -2798,7 +2968,12 @@ export default class SideNote extends Plugin {
     }
 
     async loadPluginData() {
-        const rawData: any = Object.assign({}, { imageHashes: {} }, DEFAULT_SETTINGS, await this.loadData());
+        const loadedData = (await this.loadData()) as unknown as Partial<PluginData> | null;
+        const rawData: PluginData = {
+            ...DEFAULT_SETTINGS,
+            ...(loadedData ?? {}),
+            imageHashes: loadedData?.imageHashes ?? {}
+        };
         this.settings = { ...DEFAULT_SETTINGS, ...rawData };
         this.imageHashes = rawData.imageHashes || {};
 
@@ -2807,7 +2982,7 @@ export default class SideNote extends Plugin {
 
         // Migration: if data.json still has comments, migrate them
         if (rawData.comments && rawData.comments.length > 0) {
-            const oldComments = rawData.comments as Comment[];
+            const oldComments = rawData.comments;
             const existingTimestamps = new Set(this.comments.map(c => c.timestamp));
             let migratedCount = 0;
             for (const oc of oldComments) {
@@ -2883,7 +3058,7 @@ export default class SideNote extends Plugin {
             try {
                 view.dispatch({ effects: [forceUpdateEffect.of(null)] });
                 this.applyRenderedTableHighlights(view);
-            } catch (e) {
+            } catch {
                 this.editorViews.delete(view);
             }
         });
@@ -2891,9 +3066,9 @@ export default class SideNote extends Plugin {
         this.app.workspace.iterateAllLeaves((leaf) => {
             if (leaf.view instanceof MarkdownView) {
                 const editor = leaf.view.editor;
-                if (editor && (editor as any).cm) {
-                    const cm = (editor as any).cm;
-                    if (cm.dispatch) cm.dispatch({ effects: [forceUpdateEffect.of(null)] });
+                const cm = (editor as EditorWithCodeMirror).cm;
+                if (cm) {
+                    cm.dispatch({ effects: [forceUpdateEffect.of(null)] });
                     this.applyRenderedTableHighlights(cm);
                 }
             }
@@ -2903,6 +3078,7 @@ export default class SideNote extends Plugin {
     }
 
     private createSelectionToolbarPlugin() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias -- Nested CodeMirror classes need the owning plugin instance.
         const plugin = this;
         let activeToolbarController: { view: EditorView, hideToolbar: () => void } | null = null;
 
@@ -2919,7 +3095,7 @@ export default class SideNote extends Plugin {
 
             update(update: ViewUpdate) {
                 if (update.selectionSet || update.viewportChanged) {
-                    setTimeout(() => this.checkSelection(), 10);
+                    window.setTimeout(() => this.checkSelection(), 10);
                 }
             }
 
@@ -2953,7 +3129,7 @@ export default class SideNote extends Plugin {
                 this.hideToolbar();
             }
 
-            showToolbar(selection: any) {
+            showToolbar(selection: SelectionRange) {
                 if (this.toolbar && !this.toolbar.isConnected) {
                     this.toolbar = null;
                 }
@@ -2965,7 +3141,7 @@ export default class SideNote extends Plugin {
                 });
 
                 if (!this.toolbar) {
-                    this.toolbar = document.createElement("div");
+                    this.toolbar = createDiv();
                     this.toolbar.className = "sidenote-selection-toolbar";
                     document.body.appendChild(this.toolbar);
                     this.buildToolbarUI();
@@ -2990,10 +3166,10 @@ export default class SideNote extends Plugin {
                     endLine.number - 1,
                     selection.to - endLine.from
                 ) : undefined;
-                const existingIndicator = this.toolbar.querySelector('.sidenote-existing-indicator') as HTMLElement | null;
+                const existingIndicator = this.toolbar.querySelector<HTMLElement>('.sidenote-existing-indicator');
                 if (existingIndicator) existingIndicator.toggleAttribute('hidden', !existingComment);
                 this.toolbar.classList.toggle('sidenote-toolbar-existing', Boolean(existingComment));
-                const commentButton = this.toolbar.querySelector('[data-sidenote-action="comment"]') as HTMLButtonElement | null;
+                const commentButton = this.toolbar.querySelector<HTMLButtonElement>('[data-sidenote-action="comment"]');
                 if (commentButton) {
                     commentButton.title = existingComment ? '编辑批注' : '添加批注';
                     commentButton.setAttribute('aria-label', commentButton.title);
@@ -3008,7 +3184,7 @@ export default class SideNote extends Plugin {
                     });
 
                 const activeColor = existingComment?.color || plugin.settings.highlightColor || DEFAULT_SETTINGS.highlightColor;
-                const toolbarColorPicker = this.toolbar.querySelector('.sidenote-toolbar-color-picker') as HTMLInputElement | null;
+                const toolbarColorPicker = this.toolbar.querySelector<HTMLInputElement>('.sidenote-toolbar-color-picker');
                 if (toolbarColorPicker && /^#[0-9a-f]{6}$/i.test(activeColor)) toolbarColorPicker.value = activeColor;
                 const colorCircles = Array.from(this.toolbar.querySelectorAll<HTMLElement>('.sidenote-color-circle'));
                 colorCircles.forEach(circle => {
@@ -3075,7 +3251,7 @@ export default class SideNote extends Plugin {
                 if (!this.toolbar) return;
                 
                 const createBtn = (iconName: string, tooltip: string, markType: CommentMarkType, skipModal: boolean = false) => {
-                    const btn = document.createElement('button');
+                    const btn = createEl('button');
                     btn.type = 'button';
                     btn.className = 'sidenote-toolbar-btn';
                     btn.title = tooltip;
@@ -3103,17 +3279,17 @@ export default class SideNote extends Plugin {
                 this.toolbar.appendChild(strikethroughBtn);
                 this.toolbar.appendChild(commentBtn);
 
-                const existingIndicator = document.createElement('span');
+                const existingIndicator = createSpan();
                 existingIndicator.className = 'sidenote-existing-indicator';
                 existingIndicator.textContent = '已批注';
                 existingIndicator.hidden = true;
                 this.toolbar.appendChild(existingIndicator);
 
-                const divider = document.createElement('div');
+                const divider = createDiv();
                 divider.className = 'sidenote-toolbar-divider';
                 this.toolbar.appendChild(divider);
 
-                const colorPicker = document.createElement('input');
+                const colorPicker = createEl('input');
                 colorPicker.type = 'color';
                 colorPicker.className = 'sidenote-toolbar-color-picker';
                 colorPicker.value = plugin.settings.highlightColor || "#FFC800";
@@ -3132,7 +3308,7 @@ export default class SideNote extends Plugin {
                 };
 
                 COLOR_PRESETS.forEach(color => {
-                    const circle = document.createElement('button');
+                    const circle = createEl('button');
                     circle.type = 'button';
                     circle.className = 'sidenote-color-circle';
                     circle.style.setProperty('--circle-color', color.value);
@@ -3149,7 +3325,7 @@ export default class SideNote extends Plugin {
                     this.toolbar?.appendChild(circle);
                 });
 
-                const customColorWrapper = document.createElement('label');
+                const customColorWrapper = createEl('label');
                 customColorWrapper.className = 'sidenote-color-circle custom-color';
                 customColorWrapper.title = '自定义颜色';
                 customColorWrapper.setAttribute('aria-label', '自定义颜色');
@@ -3186,6 +3362,7 @@ export default class SideNote extends Plugin {
     }
 
     private createHighlightPlugin() {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias -- Nested CodeMirror classes need the owning plugin instance.
         const plugin = this;
         const commentTooltip = hoverTooltip((view, pos, side) => {
             const filePath = plugin.getFilePathForEditorView(view);
@@ -3216,7 +3393,7 @@ export default class SideNote extends Plugin {
             return {
                 pos, above: true, arrow: false, offset: { x: 0, y: 10 },
                 create(view) {
-                    const dom = document.createElement("div");
+                    const dom = createDiv();
                     dom.className = "sidenote-tooltip";
                     dom.classList.add("is-loading");
 
@@ -3236,7 +3413,7 @@ export default class SideNote extends Plugin {
                     const d = new Date(hoveredComment.timestamp);
                     dateSpan.textContent = `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2,"0")}:${d.getMinutes().toString().padStart(2,"0")}`;
 
-                    (async () => {
+                    void (async () => {
                         await plugin.renderCommentContent(hoveredComment.comment || "", content, hoveredComment.filePath);
                         dom.classList.remove("is-loading");
                     })();
@@ -3259,30 +3436,28 @@ export default class SideNote extends Plugin {
         const highlightPlugin = ViewPlugin.fromClass(class {
             decorations: DecorationSet;
             view: EditorView;
-            private readonly boundHandleClick: (event: MouseEvent) => void;
             constructor(view: EditorView) {
                 this.view = view;
-                this.boundHandleClick = this.handleClick.bind(this);
                 plugin.editorViews.add(view);
                 this.decorations = this.buildDecorations(view);
                 window.setTimeout(() => plugin.applyRenderedTableHighlights(view), 0);
-                this.view.dom.addEventListener('click', this.boundHandleClick);
+                this.view.dom.addEventListener('click', this.handleClick);
             }
             destroy() { 
                 plugin.editorViews.delete(this.view);
-                this.view.dom.removeEventListener('click', this.boundHandleClick);
+                this.view.dom.removeEventListener('click', this.handleClick);
             }
-            handleClick(event: MouseEvent) {
+            private readonly handleClick = (event: MouseEvent) => {
                 const target = event.target as HTMLElement;
                 const highlight = target.closest('.sidenote-highlight');
                 if (highlight) {
                     const timestampStr = highlight.getAttribute('data-comment-timestamp');
                     if (timestampStr) {
                         const timestamp = parseInt(timestampStr, 10);
-                        plugin.activateViewAndHighlightComment(timestamp);
+                        void plugin.activateViewAndHighlightComment(timestamp);
                     }
                 }
-            }
+            };
             update(update: ViewUpdate) {
                 if (update.docChanged) plugin.mapCommentPositionsFromView(update);
                 if (update.docChanged || update.viewportChanged || update.transactions.some(tr => tr.effects.some(e => e.is(forceUpdateEffect)))) {
@@ -3353,7 +3528,7 @@ export default class SideNote extends Plugin {
                             try {
                                 const endLineObj = doc.line(comment.endLine + 1);
                                 to = endLineObj.from + comment.endChar;
-                            } catch (e) {
+                            } catch {
                                 to = doc.length;
                             }
                         }
@@ -3376,13 +3551,15 @@ export default class SideNote extends Plugin {
                                 })
                             });
                         }
-                    } catch (e) {}
+                    } catch {
+                        return;
+                    }
                 });
                 decorationsArray.sort((a, b) => a.from - b.from);
                 decorationsArray.forEach(({ from, to, decoration }) => builder.add(from, to, decoration));
                 return builder.finish();
             }
-        }, { decorations: (v: any) => v.decorations });
+        }, { decorations: (value) => value.decorations });
 
         return [highlightPlugin, commentTooltip];
     }

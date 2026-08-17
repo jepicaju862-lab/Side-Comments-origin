@@ -71,7 +71,7 @@ function scanInline(text: string, base: number): CharEntry[] {
     let i = 0;
     while (i < text.length) {
         const c = text[i];
-        const two = text.substr(i, 2);
+        const two = text.slice(i, i + 2);
 
         if (style.code) {
             if (c === "`") {
@@ -335,7 +335,7 @@ function runOptionsFor(style: InlineStyle, covering: ResolvedComment[]): IRunOpt
     if (underline) opts.underline = {};
     if (style.code) opts.font = "Consolas";
     if (highlightColor) opts.shading = { fill: normalizeHex(highlightColor) };
-    return opts as IRunOptions;
+    return opts;
 }
 
 function normalizeHex(hex: string): string {

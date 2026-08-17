@@ -8,6 +8,7 @@
 可以添加视觉标记和独立的 Markdown 批注，无需向原笔记插入额外语法。
 
 - **官方网站：** [peyote.info](https://peyote.info/)
+- **当前版本：** [v1.0.7](https://github.com/jepicaju862-lab/Side-Comments-origin/releases/tag/1.0.7)
 
 
 ## 🌟 功能
